@@ -70,7 +70,7 @@ export function decodeGatewaySSE(text){
   const v=trimmed.slice(5).trim();if(!v||v==='[DONE]')continue;
   let event;try{event=JSON.parse(v);}catch{continue;}
   saw=true;
-  if(shapes.length<2)shapes.push(Object.keys(event).join(','));
+  const choice=event.choices?.[0]||{};const shape='choice:'+Object.keys(choice).join(',')+' delta:'+Object.keys(choice.delta||{}).join(',')+' message:'+Object.keys(choice.message||{}).join(',')+' finish:'+String(choice.finish_reason||'');if(!shapes.includes(shape)&&shapes.length<4)shapes.push(shape);
   if(event.error)throw Error('GATEWAY_STREAM_ERROR');
   const delta=event.choices?.[0]?.delta?.content;
   if(typeof delta==='string')fragments+=delta;
