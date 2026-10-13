@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { Script } from 'node:vm';
+
+const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+new Script(source.replace('export default {', 'const worker = {'), { filename: 'worker.js' });
+const a = source.indexOf('const TOOLS=') + 'const TOOLS='.length;
+const b = source.indexOf(';\nconst HTML=', a);
+const tools = JSON.parse(source.slice(a, b));
+assert.equal(tools.length, 46, '46 tools are required');
+assert.equal(new Set(tools.map(t => t.id)).size, tools.length, 'tool IDs must be unique');
+assert.deepEqual(['p1','p2','p3','p4'].map(c => tools.filter(t => t.category === c).length), [17,11,13,5]);
+const h = source.indexOf('const HTML=') + 'const HTML='.length;
+const e = source.indexOf(';\nconst headers=', h);
+const html = JSON.parse(source.slice(h,e));
+assert.ok(html.includes('<meta name="viewport"'), 'mobile responsive layout');
+const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
+assert.ok(scripts.length >= 1, 'browser application script');
+new Script(scripts.at(-1)[1], { filename: 'client.js' });
+for (const t of tools) assert.ok(html.includes(t.title) || html.includes('tool-data'), 'tool registry loaded');
+assert.equal(tools.filter(t => t.status === 'ready').length, 7, '7 first-batch local tools');
+console.log('PASS: Worker + browser syntax, 46 unique entries, categories, and 7 local tools');
