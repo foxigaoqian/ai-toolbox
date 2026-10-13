@@ -71,7 +71,7 @@ export async function generateText(env,system,user,options={}){
   }
   if(reply.status>=300&&reply.status<400)throw Error('GATEWAY_REDIRECT_REJECTED');
   if(!reply.ok)throw Error('GATEWAY_HTTP_'+reply.status);
-  let payload;try{payload=await reply.json();}catch{throw Error('GATEWAY_BAD_JSON');}
+  let payload;try{payload=await reply.json();}catch{const mime=String(reply.headers.get('content-type')||'unknown').split(';')[0].slice(0,60);throw Error('GATEWAY_BAD_JSON_'+mime);}
   const output=payload?.choices?.[0]?.message?.content;
   if(typeof output!=='string'||!output.trim())throw Error('GATEWAY_EMPTY_RESPONSE');
   return {response:output,provider:'openai-compatible',model:textModel(env)};
