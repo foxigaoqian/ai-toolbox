@@ -1,3 +1,4 @@
+import {generateText} from './provider.js';
 import {parseAiResponse,getSession,reserveQuota,refundQuota,sendJson} from './generation.js';
 const BATCH_TOOL_IDS=new Set(['tool-03','tool-12']);
 const uuid=()=>crypto.randomUUID();
@@ -60,7 +61,7 @@ async function consumeOne(msg,env){
  await env.DB.prepare("UPDATE batches SET status='running',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'").bind(batchId).run();
  try{
   const instruction='用下列主题创作中文原创图文文案，返回合法 JSON，对象含 title、body（200-400字，分段）、tags（3至5个）。不要 Markdown 围栏，不编造具体事实或评价。创作主题：'+item.prompt;
-  const o=await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast',{messages:[{role:'system',content:'你是专业中文图文内容创作者。必须输出 JSON，避免虚构或夸大。'},{role:'user',content:instruction}],max_tokens:1000,temperature:0.7});
+  const o=await generateText(env,'你是专业中文图文内容创作者。必须输出 JSON，避免虚构或夸大。',instruction,{max_tokens:1000,temperature:0.7});
   const d=parseAiResponse(o?.response||o?.choices?.[0]?.message?.content,item.prompt);
   const workId=uuid();
   await env.DB.batch([
