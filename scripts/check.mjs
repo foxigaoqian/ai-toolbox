@@ -40,6 +40,14 @@ assert.ok(note.images.length>=2);
 const empty=parseXhsHtml('<html><head><title>Login</title></head></html>');
 assert.equal(empty.description,'');
 assert.equal(empty.images.length,0);
+const loginHtml='<meta property="og:title" content="想了解些什么？">';
+const misleading=parseXhsHtml(loginHtml,'https://www.xiaohongshu.com/login?redirectPath=%2Fdiscovery%2Fitem%2F123');
+assert.equal(misleading.title,'');
+assert.equal(misleading.description,'');
+assert.equal(misleading.images.length,0);
+const shell=parseXhsHtml(loginHtml,'https://www.xiaohongshu.com/discovery/item/123');
+assert.equal(shell.title,'');
+
 
 const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
 assert.equal(cfg.ai.binding,'AI');
