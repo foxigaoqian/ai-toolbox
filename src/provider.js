@@ -52,6 +52,52 @@ function validEndpoint(base,part){
 export function chatEndpoint(base){return validEndpoint(base,'/chat/completions');}
 export function imageEndpoint(base){return validEndpoint(base,'/images/generations');}
 
+
+export function decodeGatewayText(payload){
+ if(payload&&typeof payload==='object'){
+  const content=payload.choices?.[0]?.message?.content;
+  if(typeof content==='string'&&content.trim())return content;
+  if(Array.isArray(content)){const joined=content.filter(x=>x&&typeof x.text==='string').map(x=>x.text).join('');if(joined.trim())return joined;}
+  if(typeof payload.output_text==='string'&&payload.output_text.trim())return payload.output_text;
+ }
+ throw Error('GATEWAY_EMPTY_RESPONSE');
+}
+export function decodeGatewaySSE(text){
+ if(typeof text!=='string'||text.length>1048576)throw Error('GATEWAY_STREAM_TOO_LARGE');
+ let fragments='',complete='',saw=false;
+ for(const line of text.split(/\r?\n/)){
+  const trimmed=line.trimStart();if(!trimmed.startsWith('data:'))continue;
+  const v=trimmed.slice(5).trim();if(!v||v==='[DONE]')continue;
+  let event;try{event=JSON.parse(v);}catch{continue;}
+  saw=true;
+  if(event.error)throw Error('GATEWAY_STREAM_ERROR');
+  const delta=event.choices?.[0]?.delta?.content;
+  if(typeof delta==='string')fragments+=delta;
+  else if(Array.isArray(delta))fragments+=delta.map(x=>x.text||'').join('');
+  const message=event.choices?.[0]?.message?.content;
+  if(typeof message==='string')complete=message;
+  if(event.type==='response.output_text.delta'&&typeof event.delta==='string')fragments+=event.delta;
+  if(event.type==='response.output_text.done'&&typeof event.text==='string')complete=event.text;
+ }
+ if(fragments.trim())return fragments;
+ if(complete.trim())return complete;
+ if(!saw)throw Error('GATEWAY_STREAM_INVALID');
+ throw Error('GATEWAY_STREAM_EMPTY');
+}
+async function readGatewayText(reply){
+ const mime=String(reply.headers?.get?.('content-type')||'').toLowerCase();
+ if(mime.includes('text/event-stream'))return decodeGatewaySSE(await reply.text());
+ if(mime.includes('application/json')||!mime){
+  let data;try{data=await reply.json();}catch{throw Error('GATEWAY_BAD_JSON');}
+  return decodeGatewayText(data);
+ }
+ const text=await reply.text();
+ if(text.length>1048576)throw Error('GATEWAY_RESPONSE_TOO_LARGE');
+ if(text.trimStart().startsWith('data:'))return decodeGatewaySSE(text);
+ if(text.trimStart().startsWith('{')){try{return decodeGatewayText(JSON.parse(text));}catch{}}
+ throw Error('GATEWAY_UNSUPPORTED_RESPONSE_'+mime.split(';')[0].replace(/[^a-z0-9/+-]/g,'').slice(0,40));
+}
+
 export async function generateText(env,system,user,options={}){
  const status=providerStatus(env);
  const max_tokens=Math.max(256,Math.min(1400,Number(options.max_tokens)||1000));
@@ -71,9 +117,7 @@ export async function generateText(env,system,user,options={}){
   }
   if(reply.status>=300&&reply.status<400)throw Error('GATEWAY_REDIRECT_REJECTED');
   if(!reply.ok)throw Error('GATEWAY_HTTP_'+reply.status);
-  let payload;try{payload=await reply.json();}catch{const mime=String(reply.headers.get('content-type')||'unknown').split(';')[0].slice(0,60);throw Error('GATEWAY_BAD_JSON_'+mime);}
-  const output=payload?.choices?.[0]?.message?.content;
-  if(typeof output!=='string'||!output.trim())throw Error('GATEWAY_EMPTY_RESPONSE');
+  const output=await readGatewayText(reply);
   return {response:output,provider:'openai-compatible',model:textModel(env)};
  }
  if(!env.AI)throw Error('WORKERS_AI_NOT_BOUND');
