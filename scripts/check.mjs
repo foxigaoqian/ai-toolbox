@@ -82,6 +82,7 @@ assert.equal(cfg.ai.binding,'AI');
 assert.equal(cfg.d1_databases[0].binding,'DB');
 assert.equal(cfg.r2_buckets[0].binding,'ASSETS');
 assert.equal(cfg.queues.producers[0].binding,'BATCH_QUEUE');
+assert.equal(cfg.browser.binding,'BROWSER');
 const {parseAiResponse}=await import('../src/generation.js');
 const structured=parseAiResponse({title:'测试',body:'这是一段来自结构化响应的正文。',tags:['示例']},'提示词');
 assert.equal(structured.body,'这是一段来自结构化响应的正文。');
