@@ -26,7 +26,9 @@ const {XHS_CLIENT}=await import('../src/xhs-client.js');
 new Script(XHS_CLIENT,{filename:'xhs-app.js'});
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
-const {parseXhsHtml}=await import('../src/xhs.js');
+const {parseXhsHtml,extractSharedUrl}=await import('../src/xhs.js');
+assert.equal(extractSharedUrl('小红书公开笔记 http://xhslink.com/a/abc123 看看'),'https://xhslink.com/a/abc123');
+assert.equal(extractSharedUrl('https://localhost/admin'),null);
 const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
   '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+
