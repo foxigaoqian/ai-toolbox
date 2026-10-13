@@ -43,7 +43,8 @@ function validEndpoint(base,part){
     hostname==='127.0.0.1'||hostname.startsWith('127.')||hostname.startsWith('10.')||
     hostname.startsWith('192.168.')||hostname.startsWith('172.')||
     hostname==='[::1]'||hostname.includes('%'))throw Error('GATEWAY_INVALID_BASE_URL');
- const path=u.pathname.replace(/\/+$/,'');
+ let path=u.pathname.replace(/\/+$/,'');
+ if(path==='')path='/v1';
  if(path.split('/').includes('..'))throw Error('GATEWAY_INVALID_BASE_URL');
  u.pathname=path.endsWith(part)?path:path+part;
  return u.toString();
