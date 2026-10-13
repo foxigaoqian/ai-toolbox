@@ -48,4 +48,14 @@ async function upload(req,env){
  }catch(e){if(used&&s)await undo(env.DB,'session:upload:'+s.id);await undo(env.DB,'global:upload');return send({error:'UPLOAD_FAILED',message:String(e?.message||e)},400,s?.cookie||'');}
 }
 async function getAsset(req,env,id){const s=await session(req,env,false);if(!s)return send({error:'NOT_FOUND'},404);const row=await env.DB.prepare('SELECT object_key,mime FROM assets WHERE id=? AND owner=?').bind(id,s.id).first();if(!row)return send({error:'NOT_FOUND'},404);const obj=await env.ASSETS.get(row.object_key);if(!obj)return send({error:'NOT_FOUND'},404);return new Response(obj.body,{headers:{'content-type':row.mime,'cache-control':'private,max-age=300','x-content-type-options':'nosniff','content-disposition':'inline'}});}
-export async function handleApi(req,env){const p=new URL(req.url).pathname;if(p==='/api/generate'&&req.method==='POST')return generate(req,env);if(p==='/api/works'&&req.method==='GET')return history(req,env);if(p==='/api/assets'&&req.method==='POST')return upload(req,env);const a=p.match(/^\/api\/assets\/([a-f0-9-]{36})$/);if(a&&req.method==='GET')return getAsset(req,env,a[1]);return null;}
+
+async function updateWork(req,env,id){
+ const s=await session(req,env,false);if(!s)return send({error:'UNAUTHORIZED',message:'当前浏览器尚无作品会话'},401);
+ let input;try{input=await req.json();}catch{return send({error:'INVALID_JSON'},400);}
+ const title=String(input.title||'').trim().slice(0,130),body=String(input.body||'').trim().slice(0,9000);
+ if(title.length<1||body.length<1)return send({error:'EMPTY_WORK'},422);
+ const out=await env.DB.prepare('UPDATE works SET title=?,body=? WHERE id=? AND owner=?').bind(title,body,id,s.id).run();
+ return out.meta?.changes?send({ok:true,id,saved:true}):send({error:'NOT_FOUND'},404);
+}
+
+export async function handleApi(req,env){const p=new URL(req.url).pathname;if(p==='/api/generate'&&req.method==='POST')return generate(req,env);if(p==='/api/works'&&req.method==='GET')return history(req,env);if(p==='/api/assets'&&req.method==='POST')return upload(req,env);const w=p.match(/^\/api\/works\/([a-f0-9-]{36})$/);if(w&&req.method==='PATCH')return updateWork(req,env,w[1]);const a=p.match(/^\/api\/assets\/([a-f0-9-]{36})$/);if(a&&req.method==='GET')return getAsset(req,env,a[1]);return null;}
