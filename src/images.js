@@ -61,6 +61,7 @@ async function remix(req,env){
  let input;try{input=await req.formData()}catch{return sendJson({error:'IMAGE_EDIT_INVALID_FORM'},400)}
  const file=input.get('reference');
  const prompt=String(input.get('prompt')||'').trim(),size=String(input.get('size')||'1024x1536');
+ const mode=input.get('mode')==='background'?'background':'full';
  if(!file||typeof file.arrayBuffer!=='function'||!file.size||file.size>4194304)
   return sendJson({error:'IMAGE_REFERENCE_REQUIRED',message:'请上传小于4MB的参考图片'},422);
  if(!['image/png','image/jpeg','image/webp'].includes(file.type))
@@ -83,14 +84,16 @@ async function remix(req,env){
    await refundQuota(env.DB,'global:images');
    return sendJson({error:'IMAGE_BROWSER_DAILY_LIMIT',message:'每个浏览器每天最多生成6张图片（含普通生图）'},429,owner.cookie);
   }
-  const enhancedPrompt='请把输入图片仅作为布局、色彩和信息层级的视觉参考，创作一张新的原创小红书图文画面。保留大致构图逻辑但使用原创装饰和图形元素，不复制原始水印、商标或特定人物。将旧文案替换为新的用户指定内容（中文要清晰可读），不要重复旧图片上的标题和正文。具体要求：'+prompt;
+  const enhancedPrompt=mode==='background'
+    ? '你正在制作【纯视觉底图】，后续前端 Canvas 会单独绘制所有中文标题和正文。严格禁止任何文字、字母、数字、字幕、Logo、水印、标语或看似文字的字符；尤其要清除原图中已有的所有文字，不能保留原文。参考输入图片的配色、图形元素、留白和信息布局，生成一张全新的原创无字竖版底图。把画面下半部留成干净、低纹理、浅色的中文排版空白区，画面上部使用精致的主题插画或装饰，整体统一、耐看且方便后续叠字。不复制原图人物、标识。视觉要求：'+prompt
+    : '参考输入图片的版式、色彩和视觉层次，创作原创图文，避免复制水印与商标。文字部分需准确但可能需要编辑器纠错。用户要求：'+prompt;
   const img=await remakeImage(env,file,enhancedPrompt,{size});
-  if(img.kind==='url')return sendJson({ok:true,kind:'temporary-external-url',url:img.url,saved:false,model:img.model,warning:'图片模型返回临时图片外链，暂无法保存到作品库，请及时另存'},200,owner.cookie);
+  if(img.kind==='url')return sendJson({ok:true,kind:'temporary-external-url',url:img.url,saved:false,mode,model:img.model,warning:'图片模型返回临时图片外链，建议下载后再导入编辑器'},200,owner.cookie);
   const bytes=decodeImage(img.data),format=sniff(bytes),id=crypto.randomUUID(),key=owner.id+'/'+id+'.'+format.ext;
   await env.ASSETS.put(key,bytes,{httpMetadata:{contentType:format.mime}});
   try{await env.DB.prepare('INSERT INTO assets(id,owner,object_key,mime,size) VALUES(?,?,?,?,?)').bind(id,owner.id,key,format.mime,bytes.length).run();}
   catch(e){await env.ASSETS.delete(key).catch(()=>{});throw e}
-  return sendJson({ok:true,kind:'private-asset',id,url:'/api/assets/'+id,model:img.model,saved:true},201,owner.cookie);
+  return sendJson({ok:true,kind:'private-asset',id,url:'/api/assets/'+id,model:img.model,mode,saved:true},201,owner.cookie);
  }catch(e){
   if(reserved&&owner)await refundQuota(env.DB,'session:images:'+owner.id);
   await refundQuota(env.DB,'global:images');
