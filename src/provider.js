@@ -64,12 +64,13 @@ export function decodeGatewayText(payload){
 }
 export function decodeGatewaySSE(text){
  if(typeof text!=='string'||text.length>1048576)throw Error('GATEWAY_STREAM_TOO_LARGE');
- let fragments='',complete='',saw=false;
+ let fragments='',complete='',saw=false,shapes=[];
  for(const line of text.split(/\r?\n/)){
   const trimmed=line.trimStart();if(!trimmed.startsWith('data:'))continue;
   const v=trimmed.slice(5).trim();if(!v||v==='[DONE]')continue;
   let event;try{event=JSON.parse(v);}catch{continue;}
   saw=true;
+  if(shapes.length<2)shapes.push(Object.keys(event).join(','));
   if(event.error)throw Error('GATEWAY_STREAM_ERROR');
   const delta=event.choices?.[0]?.delta?.content;
   if(typeof delta==='string')fragments+=delta;
@@ -82,7 +83,7 @@ export function decodeGatewaySSE(text){
  if(fragments.trim())return fragments;
  if(complete.trim())return complete;
  if(!saw)throw Error('GATEWAY_STREAM_INVALID');
- throw Error('GATEWAY_STREAM_EMPTY');
+ throw Error('GATEWAY_STREAM_EMPTY_'+shapes.join('|'));
 }
 async function readGatewayText(reply){
  const mime=String(reply.headers?.get?.('content-type')||'').toLowerCase();
