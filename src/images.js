@@ -1,4 +1,4 @@
-import {generateImage,providerStatus} from './provider.js';
+import {generateImage,remakeImage,providerStatus} from './provider.js';
 import {getSession,reserveQuota,refundQuota,sendJson} from './generation.js';
 
 // Paid external image calls are off until the image-group token is configured.
@@ -28,12 +28,12 @@ async function create(req,env){
  if(prompt.length<3||prompt.length>1300)return sendJson({error:'INVALID_PROMPT',message:'图片描述需为3–1300字'},422);
  if(!providerStatus(env).imageConfigured)return sendJson({error:'IMAGE_KEY_REQUIRED',message:'请在 Cloudflare 配置 AI_IMAGE_API_KEY 及 AI_BASE_URL'},503);
  if(!env.DB||!env.ASSETS)return sendJson({error:'STORAGE_NOT_READY'},503);
- if(!await reserveQuota(env.DB,'global:images',10))return sendJson({error:'IMAGE_GLOBAL_DAILY_LIMIT',message:'今天公共图片试用额度已用完'},429);
+ if(!await reserveQuota(env.DB,'global:images',20))return sendJson({error:'IMAGE_GLOBAL_DAILY_LIMIT',message:'今天公共图片试用额度已用完'},429);
  let owner=null,reserved=false;
  try{
   owner=await getSession(req,env,true);
-  reserved=await reserveQuota(env.DB,'session:images:'+owner.id,2);
-  if(!reserved){await refundQuota(env.DB,'global:images');return sendJson({error:'IMAGE_BROWSER_DAILY_LIMIT',message:'每个浏览器每天最多生成2张图片'},429,owner.cookie);}
+  reserved=await reserveQuota(env.DB,'session:images:'+owner.id,6);
+  if(!reserved){await refundQuota(env.DB,'global:images');return sendJson({error:'IMAGE_BROWSER_DAILY_LIMIT',message:'每个浏览器每天最多生成6张图片（含复刻图片）'},429,owner.cookie);}
   const img=await generateImage(env,prompt,{size:body.size});
   if(img.kind==='url')return sendJson({ok:true,kind:'temporary-external-url',url:img.url,model:img.model,size:img.size,saved:false,warning:'此服务返回临时外链，请及时下载。'},200,owner.cookie);
   const bytes=decodeImage(img.data),format=sniff(bytes),id=crypto.randomUUID(),key=owner.id+'/'+id+'.'+format.ext;
@@ -49,8 +49,60 @@ async function create(req,env){
   return sendJson({error:'IMAGE_GENERATION_FAILED',detail:err.startsWith('IMAGE_')?err:'IMAGE_SERVICE_UNAVAILABLE',message:'图片生成失败，检查模型权限、分组及网关接口'},503,owner?.cookie||'');
  }
 }
+
+/** Reference-image remake. No client-provided remote URLs are fetched here. */
+async function remix(req,env){
+ const mime=(req.headers.get('content-type')||'').toLowerCase();
+ if(!mime.startsWith('multipart/form-data'))return sendJson({error:'IMAGE_EDIT_MULTIPART_REQUIRED'},415);
+ const contentLength=Number(req.headers.get('content-length')||0);
+ if(contentLength>4700000)return sendJson({error:'IMAGE_REFERENCE_TOO_LARGE',message:'参考图请压缩至 4MB 以下'},413);
+ if(!providerStatus(env).imageConfigured)return sendJson({error:'IMAGE_KEY_REQUIRED',message:'图片组 Key 未配置'},503);
+ if(!env.DB||!env.ASSETS)return sendJson({error:'STORAGE_NOT_READY'},503);
+ let input;try{input=await req.formData()}catch{return sendJson({error:'IMAGE_EDIT_INVALID_FORM'},400)}
+ const file=input.get('reference');
+ const prompt=String(input.get('prompt')||'').trim(),size=String(input.get('size')||'1024x1536');
+ if(!file||typeof file.arrayBuffer!=='function'||!file.size||file.size>4194304)
+  return sendJson({error:'IMAGE_REFERENCE_REQUIRED',message:'请上传小于4MB的参考图片'},422);
+ if(!['image/png','image/jpeg','image/webp'].includes(file.type))
+  return sendJson({error:'IMAGE_REFERENCE_FORMAT',message:'参考图仅支持 PNG/JPG/WebP'},415);
+ if(prompt.length<10||prompt.length>1800)
+  return sendJson({error:'IMAGE_INVALID_PROMPT',message:'图片复刻要求需为10–1800字'},422);
+ if(!['1024x1024','1024x1536','1536x1024'].includes(size))
+  return sendJson({error:'IMAGE_INVALID_SIZE'},422);
+ // Verify MIME corresponds to actual image header, not just uploaded extension.
+ const header=new Uint8Array((await file.arrayBuffer()).slice(0,16));
+ let type;try{type=sniff(header)}catch{return sendJson({error:'IMAGE_REFERENCE_INVALID'},422)}
+ if(type.mime!==file.type)return sendJson({error:'IMAGE_REFERENCE_FORMAT_MISMATCH'},422);
+ if(!await reserveQuota(env.DB,'global:images',20))
+  return sendJson({error:'IMAGE_GLOBAL_DAILY_LIMIT',message:'今天图片生成额度已用完'},429);
+ let owner=null,reserved=false;
+ try{
+  owner=await getSession(req,env,true);
+  reserved=await reserveQuota(env.DB,'session:images:'+owner.id,6);
+  if(!reserved){
+   await refundQuota(env.DB,'global:images');
+   return sendJson({error:'IMAGE_BROWSER_DAILY_LIMIT',message:'每个浏览器每天最多生成6张图片（含普通生图）'},429,owner.cookie);
+  }
+  const enhancedPrompt='请把输入图片仅作为布局、色彩和信息层级的视觉参考，创作一张新的原创小红书图文画面。保留大致构图逻辑但使用原创装饰和图形元素，不复制原始水印、商标或特定人物。将旧文案替换为新的用户指定内容（中文要清晰可读），不要重复旧图片上的标题和正文。具体要求：'+prompt;
+  const img=await remakeImage(env,file,enhancedPrompt,{size});
+  if(img.kind==='url')return sendJson({ok:true,kind:'temporary-external-url',url:img.url,saved:false,model:img.model,warning:'图片模型返回临时图片外链，暂无法保存到作品库，请及时另存'},200,owner.cookie);
+  const bytes=decodeImage(img.data),format=sniff(bytes),id=crypto.randomUUID(),key=owner.id+'/'+id+'.'+format.ext;
+  await env.ASSETS.put(key,bytes,{httpMetadata:{contentType:format.mime}});
+  try{await env.DB.prepare('INSERT INTO assets(id,owner,object_key,mime,size) VALUES(?,?,?,?,?)').bind(id,owner.id,key,format.mime,bytes.length).run();}
+  catch(e){await env.ASSETS.delete(key).catch(()=>{});throw e}
+  return sendJson({ok:true,kind:'private-asset',id,url:'/api/assets/'+id,model:img.model,saved:true},201,owner.cookie);
+ }catch(e){
+  if(reserved&&owner)await refundQuota(env.DB,'session:images:'+owner.id);
+  await refundQuota(env.DB,'global:images');
+  const detail=String(e?.message||e);
+  return sendJson({error:'IMAGE_EDIT_FAILED',detail:detail.startsWith('IMAGE_')?detail:'IMAGE_SERVICE_UNAVAILABLE',
+   message:detail.startsWith('IMAGE_EDIT_HTTP_')?'图片中转站拒绝该模型的图生图调用，请检查图片分组是否支持 /images/edits。':'图片 AI 复刻失败，请稍后重试或检查分组接口权限'},503,owner?.cookie||'');
+ }
+}
+
 export async function handleImageApi(req,env){
  const p=new URL(req.url).pathname;
  if(p==='/api/images/generate'&&req.method==='POST')return create(req,env);
+ if(p==='/api/images/remix'&&req.method==='POST')return remix(req,env);
  return null;
 }
