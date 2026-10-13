@@ -65,6 +65,9 @@ function jsonStringField(html,key){
  try{return JSON.parse(m[1]).slice(0,6500)}catch{return ''}
 }
 export function parseXhsHtml(html,url=''){
+ const path=validXhs(url)?.pathname||'';
+ if(/^\/(?:login|signin|passport)(?:\/|$)/i.test(path))
+  return {sourceUrl:url,title:'',description:'',images:[],mode:'login-required',partial:true};
  const meta=metaTags(html),imgs=new Set();
  let jsonTitle='',jsonBody='';
  for(const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
@@ -84,7 +87,7 @@ export function parseXhsHtml(html,url=''){
  const article=jsonStringField(html,'desc');
  const description=strip(article||jsonBody||meta['og:description']||meta.description||'').slice(0,5500);
  // Generic login shells contain no note content. Never invent source material.
- const generic=/^(小红书|小红书 - 标记我的生活|REDnote|登录小红书|发现精彩)/i.test(title)&&description.length<50;
+ const generic=description.length<50&&imgs.size===0&&(/^(小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)/i.test(title)||/^(小红书|REDnote|登录|发现)$/i.test(title));
  return {sourceUrl:url,title:generic?'':title,description:generic?'':description,images:Array.from(imgs).slice(0,9),mode:'public-page-preview',partial:imgs.size===0||!description};
 }
 async function readHtml(res){
@@ -101,6 +104,7 @@ async function readHtml(res){
 async function fetchPage(href){
  let url=validXhs(href);if(!url)throw Error('INVALID_XHS_URL');
  for(let i=0;i<5;i++){
+  if(/^\/(?:login|signin|passport)(?:\/|$)/i.test(url.pathname))throw Error('LOGIN_REQUIRED');
   const resp=await fetch(url.toString(),{method:'GET',redirect:'manual',signal:AbortSignal.timeout(10000),
     headers:{'accept':'text/html,application/xhtml+xml','user-agent':'AI-Toolbox-Public-Preview/1.0'}});
   if([301,302,303,307,308].includes(resp.status)){
@@ -131,7 +135,8 @@ async function resolve(req,env){
   return reply({ok:true,...parsed,notice:'仅解析公开页面可读取的内容。图文二次创作请确保素材有合法使用权。'});
  }catch(e){
   const reason=String(e?.message||e).slice(0,90);
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE']);
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE']);
+  if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
   return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:'无法读取公开笔记。可能要求登录、链接失效或限制访问；请手动导入图片及文案。'},422);
  }
 }
