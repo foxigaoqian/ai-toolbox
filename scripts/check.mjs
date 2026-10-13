@@ -22,4 +22,8 @@ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
 assert.equal(cfg.ai.binding,'AI');
 assert.equal(cfg.d1_databases[0].binding,'DB');
 assert.equal(cfg.r2_buckets[0].binding,'ASSETS');
+const {parseAiResponse}=await import('../src/generation.js');
+const structured=parseAiResponse({title:'测试',body:'这是一段来自结构化响应的正文。',tags:['示例']},'提示词');
+assert.equal(structured.body,'这是一段来自结构化响应的正文。');
+assert.equal(parseAiResponse('{"title":"另一个","body":"来自 JSON 文本的完整正文内容","tags":[]}','原文').title,'另一个');
 console.log('PASS: Worker modules, client browser script, 46 tools, 6 real AI text entries, D1/R2/AI bindings');
