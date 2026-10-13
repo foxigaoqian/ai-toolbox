@@ -61,15 +61,15 @@ export async function generateText(env,system,user,options={}){
   const url=chatEndpoint(textBase(env));
   let reply;
   try{
-   reply=await fetch(url,{method:'POST',redirect:'error',signal:AbortSignal.timeout(40000),
+   reply=await fetch(url,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(40000),
     headers:{authorization:'Bearer '+textKey(env),'content-type':'application/json'},
     body:JSON.stringify({model:textModel(env),messages:[{role:'system',content:system},{role:'user',content:user}],
        max_tokens,temperature,stream:false})});
    }catch(e){
    const name=String(e?.name||'Error').replace(/[^a-zA-Z]/g,'').slice(0,28);
-   const cause=String(e?.message||'').replace(/sk-[a-zA-Z0-9_-]+/g,'[redacted]').slice(0,180);
-   throw Error('GATEWAY_NETWORK_FAILED:' + name + ':' + cause);
+   throw Error(name==='TimeoutError'||name==='AbortError'?'GATEWAY_TIMEOUT':'GATEWAY_NETWORK_FAILED_'+name);
   }
+  if(reply.status>=300&&reply.status<400)throw Error('GATEWAY_REDIRECT_REJECTED');
   if(!reply.ok)throw Error('GATEWAY_HTTP_'+reply.status);
   let payload;try{payload=await reply.json();}catch{throw Error('GATEWAY_BAD_JSON');}
   const output=payload?.choices?.[0]?.message?.content;
@@ -91,11 +91,12 @@ export async function generateImage(env,prompt,options={}){
  let reply;
  try{
   reply=await fetch(imageEndpoint(imageBase(env)),{
-    method:'POST',redirect:'error',signal:AbortSignal.timeout(115000),
+    method:'POST',redirect:'manual',signal:AbortSignal.timeout(115000),
     headers:{authorization:'Bearer '+imageKey(env),'content-type':'application/json'},
     body:JSON.stringify({model:imageModel(env),prompt:prompt.trim(),size,n:1})
   });
  }catch{throw Error('IMAGE_NETWORK_FAILED');}
+ if(reply.status>=300&&reply.status<400)throw Error('IMAGE_REDIRECT_REJECTED');
  if(!reply.ok)throw Error('IMAGE_HTTP_'+reply.status);
  let data;try{data=await reply.json();}catch{throw Error('IMAGE_BAD_JSON');}
  const first=data?.data?.[0];
