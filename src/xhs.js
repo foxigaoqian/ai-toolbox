@@ -2,8 +2,9 @@
  * Best-effort preview of PUBLIC Xiaohongshu notes only.
  * No login, signatures, cookies, CAPTCHA bypass or platform-private endpoints.
  */
+import {parseXhsSsr,canonicalShareUrl,noteIdFromUrl} from './xhs-ssr.js';
 const LIMIT_HTML = 1200000;
-const XHS_HOSTS = new Set(['www.xiaohongshu.com','xiaohongshu.com','m.xiaohongshu.com','xhslink.com','www.xhslink.com']);
+const XHS_HOSTS = new Set(['www.xiaohongshu.com','xiaohongshu.com','m.xiaohongshu.com','xhslink.com','www.xhslink.com','xhslink.cn','www.xhslink.cn']);
 const IMG_HOST_SUFFIX = ['.xhscdn.com','.xhscdn.net'];
 const HEADERS = {'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'};
 const reply=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:HEADERS});
@@ -12,7 +13,7 @@ function validXhs(href){
  let u;try{u=new URL(href)}catch{return null}
  if(u.username||u.password||u.port||!XHS_HOSTS.has(u.hostname.toLowerCase()))return null;
  // Share text often contains http://xhslink.com; immediately upgrade to TLS.
- if(u.protocol==='http:'&&['xhslink.com','www.xhslink.com'].includes(u.hostname.toLowerCase()))u.protocol='https:';
+ if(u.protocol==='http:'&&['xhslink.com','www.xhslink.com','xhslink.cn','www.xhslink.cn'].includes(u.hostname.toLowerCase()))u.protocol='https:';
  if(u.protocol!=='https:')return null;
  return u;
 }
@@ -101,12 +102,16 @@ async function readHtml(res){
  const joined=new Uint8Array(bytes);let pos=0;for(const x of items){joined.set(x,pos);pos+=x.length}
  return new TextDecoder('utf-8',{fatal:false}).decode(joined);
 }
+const BROWSER_HEADERS={
+ 'accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+ 'accept-language':'zh-CN,zh;q=0.9,en;q=0.8',
+ 'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+};
 async function fetchPage(href){
  let url=validXhs(href);if(!url)throw Error('INVALID_XHS_URL');
  for(let i=0;i<5;i++){
   if(/^\/(?:login|signin|passport)(?:\/|$)/i.test(url.pathname))throw Error('LOGIN_REQUIRED');
-  const resp=await fetch(url.toString(),{method:'GET',redirect:'manual',signal:AbortSignal.timeout(10000),
-    headers:{'accept':'text/html,application/xhtml+xml','user-agent':'AI-Toolbox-Public-Preview/1.0'}});
+  const resp=await fetch(url.toString(),{method:'GET',redirect:'manual',signal:AbortSignal.timeout(10500),headers:BROWSER_HEADERS});
   if([301,302,303,307,308].includes(resp.status)){
    const location=resp.headers.get('location');if(!location)throw Error('LINK_REDIRECT_UNAVAILABLE');
    const next=validXhs(new URL(location,url).toString());if(!next)throw Error('UNSUPPORTED_REDIRECT');
@@ -119,6 +124,40 @@ async function fetchPage(href){
  }
  throw Error('TOO_MANY_REDIRECTS');
 }
+function safeResult(parsed){
+ return {ok:true,...parsed,notice:'公开笔记提取基于页面 SSR/元数据。内容所有权属于原作者，复刻请制作原创内容。'};
+}
+async function extractPublicNote(href){
+ const supplied=validXhs(href);if(!supplied)throw Error('INVALID_XHS_URL');
+ const paths=[supplied.toString()];
+ if(noteIdFromUrl(supplied.toString())){
+  // Use only the public xsec_token supplied in this exact share URL.
+  for(const type of ['explore','discovery/item']){
+   const alternate=canonicalShareUrl(supplied.toString(),type);
+   if(alternate&&!paths.includes(alternate))paths.push(alternate);
+  }
+ }
+ let sawLogin=false,last='NOTE_NOT_PUBLICLY_EXTRACTABLE';
+ for(const url of paths.slice(0,3)){
+  try{
+   const page=await fetchPage(url);
+   let ssr=null;
+   try{ssr=parseXhsSsr(page.html,page.url)}catch(e){last=String(e.message||e)}
+   if(ssr)return safeResult(ssr);
+   const meta=parseXhsHtml(page.html,page.url);
+   // Never treat an empty browser/login shell as a successful note.
+   if(meta.description||meta.images.length)return safeResult(meta);
+   last='NOTE_NOT_PUBLICLY_EXTRACTABLE';
+  }catch(e){
+   const msg=String(e.message||e);
+   if(msg==='LOGIN_REQUIRED'||msg==='SOURCE_RESTRICTED'){sawLogin=true;last=msg;continue}
+   last=msg;
+  }
+ }
+ const error=new Error(sawLogin?'LOGIN_REQUIRED':last);
+ throw error;
+}
+
 async function resolve(req,env){
  if(!(req.headers.get('content-type')||'').includes('application/json'))return reply({error:'INVALID_CONTENT_TYPE'},415);
  let body;try{body=await req.json()}catch{return reply({error:'INVALID_JSON'},400)}
@@ -129,10 +168,7 @@ async function resolve(req,env){
  const use=await env.DB.prepare("INSERT INTO usage_limits(day,scope,used) VALUES(?,?,1) ON CONFLICT(day,scope) DO UPDATE SET used=used+1 WHERE used<80").bind(day,'global:xhs-preview').run();
  if(!use.meta?.changes)return reply({error:'PREVIEW_LIMIT',message:'今天公开链接解析次数已用完'},429);
  try{
-  const page=await fetchPage(url),parsed=parseXhsHtml(page.html,page.url);
-  if(!parsed.title&&!parsed.description&&!parsed.images.length)
-    return reply({error:'NOTE_NOT_PUBLICLY_EXTRACTABLE',message:'该笔记没有可直接读取的公开内容。可能需要登录或页面使用动态加载；可使用手动粘贴文案、上传图片的方式。'},422);
-  return reply({ok:true,...parsed,notice:'仅解析公开页面可读取的内容。图文二次创作请确保素材有合法使用权。'});
+  return reply(await extractPublicNote(url));
  }catch(e){
   const reason=String(e?.message||e).slice(0,90);
   const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE']);
