@@ -51,6 +51,7 @@ function validEndpoint(base,part){
 }
 export function chatEndpoint(base){return validEndpoint(base,'/chat/completions');}
 export function imageEndpoint(base){return validEndpoint(base,'/images/generations');}
+export function imageEditEndpoint(base){return validEndpoint(base,'/images/edits');}
 
 
 export function decodeGatewayText(payload){
@@ -127,6 +128,46 @@ export async function generateText(env,system,user,options={}){
  return {response:response?.response||response?.choices?.[0]?.message?.content,
          provider:'workers-ai',model:FALLBACK_MODEL};
 }
+
+/** AI image-to-image edit; ONE real reference image per request. */
+export async function remakeImage(env,imageFile,prompt,options={}){
+ if(!providerStatus(env).imageConfigured)throw Error('IMAGE_GATEWAY_NOT_CONFIGURED');
+ if(!imageFile||typeof imageFile.arrayBuffer!=='function'||!imageFile.size)throw Error('IMAGE_REFERENCE_REQUIRED');
+ if(imageFile.size>4*1024*1024)throw Error('IMAGE_REFERENCE_TOO_LARGE');
+ if(!['image/png','image/jpeg','image/webp'].includes(imageFile.type))throw Error('IMAGE_REFERENCE_FORMAT');
+ if(typeof prompt!=='string'||prompt.trim().length<10||prompt.length>1800)throw Error('IMAGE_INVALID_PROMPT');
+ const allowedSizes=new Set(['1024x1024','1024x1536','1536x1024']);
+ const form=new FormData();
+ form.append('model',imageModel(env));
+ form.append('prompt',prompt.trim());
+ form.append('size',allowedSizes.has(options.size)?options.size:'1024x1536');
+ form.append('n','1');
+ // Standard OpenAI-compatible image edits accepts a multipart "image" field.
+ form.append('image',imageFile,imageFile.name||'reference.png');
+ let reply;
+ try{
+  reply=await fetch(imageEditEndpoint(imageBase(env)),{
+   method:'POST',redirect:'manual',signal:AbortSignal.timeout(110000),
+   headers:{authorization:'Bearer '+imageKey(env)},body:form
+  });
+ }catch(e){
+  const name=String(e?.name||'');
+  throw Error(name==='TimeoutError'||name==='AbortError'?'IMAGE_EDIT_TIMEOUT':'IMAGE_EDIT_NETWORK_FAILED');
+ }
+ if(reply.status>=300&&reply.status<400)throw Error('IMAGE_EDIT_REDIRECT_REJECTED');
+ if(!reply.ok)throw Error('IMAGE_EDIT_HTTP_'+reply.status);
+ let data;try{data=await reply.json()}catch{throw Error('IMAGE_EDIT_BAD_JSON')}
+ const entry=data?.data?.[0];
+ const b64=entry?.b64_json||entry?.image_base64;
+ if(typeof b64==='string'&&b64.length>50)return {kind:'base64',data:b64,model:imageModel(env),size:options.size||'1024x1536'};
+ if(typeof entry?.url==='string'){
+  let uri;try{uri=new URL(entry.url)}catch{throw Error('IMAGE_EDIT_UNSAFE_URL')}
+  if(uri.protocol!=='https:'||uri.username||uri.password||uri.port||!uri.hostname||/^(127\.|10\.|192\.168\.|169\.254\.|0\.|localhost$)/i.test(uri.hostname)||uri.hostname.endsWith('.local'))throw Error('IMAGE_EDIT_UNSAFE_URL');
+  return {kind:'url',url:uri.toString(),model:imageModel(env),size:options.size||'1024x1536'};
+ }
+ throw Error('IMAGE_EDIT_EMPTY_RESPONSE');
+}
+
 export async function generateImage(env,prompt,options={}){
  const status=providerStatus(env);
  if(!status.imageConfigured)throw Error('IMAGE_GATEWAY_NOT_CONFIGURED');
