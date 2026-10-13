@@ -1,56 +1,74 @@
-# 创作云 · AI Toolbox
+# 创作云 AI Toolbox
 
-一套部署在 **Cloudflare Workers** 的中文创作工具箱，支持电脑与手机，目标范围仅包含：
-
-1. AI 图文创作（17 个入口）
-2. AI 图片工具（11 个入口）
-3. AI 电商设计（13 个入口）
-4. AI 视频生成（5 个入口）
-
-**当前版本 V0.1.0**：46 个分类工具入口与统一工作台，其中 8 个浏览器本地工具可真实使用：指定文案图文、单篇大字报图文、智能热门标题（规则模板）、封面设计器、图片裁剪、图片尺寸调整、图片压缩、图片拼图。
-
-其他 38 个工具为**待接入真实模型**，不会返回模拟 AI 成果。尚未实现用户登录、积分、R2 存储、异步云任务，也不会假装这些已可用。
+本仓库运行在 **Cloudflare Workers**，覆盖四阶段工具导航：AI 图文（17）、AI 图片（11）、AI 电商设计（13）、AI 视频（5）。
 
 ## 线上地址
 
 https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
-## API
+## V0.2 真实可用能力
 
-- `GET /api/health` — 健康检查、工具数量及已可用数量
-- `GET /api/tools` — 46 个工具的 JSON 目录
-- `GET /api/config` — AI 模型与存储服务接入状态
-- 未实现的生成 API 返回 HTTP 503 和明确错误说明
+- **8 个浏览器本地工具：** 指定文案图文、单篇大字报、热门标题规则生成、封面设计、图片裁剪、调整尺寸、压缩、拼图。
+- **6 个真实 AI 文案入口：** 一句话图文、同款参考仿写（粘贴参考内容）、多内容仿写、人设图文、爆款文案、公众号长图文的文案生成功能。模型：Cloudflare Workers AI Llama 3.1 8B Fast。
+- **2 个真实后台批量入口：** AI 批量超级图文、批量大字报图文（当前为每行主题分别生成**文案**，不是自动完整生图；2–4篇/任务）。
+- **作品中心：** D1 存储生成文案，支持修改后持久化、查看历史；图片可手动保存到私有 R2 桶，并从同浏览器找回。
+- **Cloudflare Queues：** 批量任务由后台消费并保存到 D1，可按任务 ID 查询进度。用户无需持续保持页面开启。
+- **保护机制：** 生成 API 每个浏览器单篇 4次/天，批量6篇/天；全站每日 AI 推理合计最多30次。图片保存最多 4MB/张、每浏览器12张/天、全站70张/天。
 
-## 本地开发
+**尚未完成：** 正式邮箱用户登录/跨设备账号、收费积分、AI 图片生成与修图、电商套图、视频生成、图文自动多页设计及发布。剩余入口会显示未接入，不会伪造 AI 结果。
+
+**隐私注意：** 目前是匿名会话，靠 Secure、HttpOnly Cookie 识别，每次生成自动绑定该浏览器。更换设备、清除 Cookie 或会话过期后无法访问原来的私人作品；需要长期保存请下载本地。正式账号系统将在后续开发。
+
+## 架构
+
+- 前端：Worker 中内嵌响应式 HTML / CSS / 原生 JS / Canvas
+- 接口：Worker fetch handler，AI 单篇生成与保存采用 D1
+- 异步任务：Cloudflare Queues + Worker queue handler + D1 batches/batch_items
+- 素材：私有 Cloudflare R2，所有 GET 均校验会话与 owner
+- 模型：Workers AI `@cf/meta/llama-3.1-8b-instruct-fast`
+- 数据保护：服务端验证入参、图片 magic bytes 校验、D1 参数绑定、同源会话 Cookie 与全局预算上限
+
+## 主要 API
+
+| Method | Endpoint | 用途 |
+| --- | --- | --- |
+| GET | /api/health | 服务健康及工具数 |
+| GET | /api/tools | 全工具目录 |
+| GET | /api/config | 模型与存储就绪状态 |
+| POST | /api/generate | 单篇 AI 文案 |
+| GET | /api/works | 当前浏览器的文案/图片列表 |
+| PATCH | /api/works/:id | 保存文案修改 |
+| POST | /api/assets | 仅上传 PNG/JPG/WebP 私有图片 |
+| GET | /api/assets/:id | 同会话私有图片读取 |
+| POST | /api/batches | 创建异步批量任务 |
+| GET | /api/batches | 我的批量任务 |
+| GET | /api/batches/:id | 批量任务条目与完成结果 |
+
+## 部署
 
 ```bash
 npm install
-npm run dev
-```
-
-## 发布
-
-```bash
+node scripts/check.mjs
 npx wrangler login
 npm run deploy
 ```
 
-`wrangler.jsonc` 已配置 Worker 名称 `ai-toolbox`。部署前确保登录的是目标 Cloudflare 账号。密钥须通过 Cloudflare Secrets 配置，绝不能提交到 GitHub。当前没有启用任何需要密钥的模型调用。
-
-## 自动校验
+部署 Wrangler 前，务必确认目标 Cloudflare 账号、D1 数据库、R2 桶、Queue 均已创建。首次创建环境后依次执行：
 
 ```bash
-node scripts/check.mjs
+npx wrangler d1 execute ai-toolbox-content --remote --file=migrations/0001_init.sql
+npx wrangler d1 execute ai-toolbox-content --remote --file=migrations/0002_batches.sql
 ```
 
-校验 Worker 代码、浏览器脚本语法以及 46 个工具 ID、分类数量和本地可用状态。GitHub Actions workflow 在 `.github/workflows/verify.yml`。
+Cloudflare Queues 的消费 Worker 是 `ai-toolbox`，生产队列名 `ai-toolbox-batch`。项目已通过 Cloudflare API 部署到用户账号；`wrangler.jsonc` 也包含 AI/D1/R2/Queues 配置。
 
-## 下一阶段
+GitHub Actions 只进行语法和注册表校验，**尚未配置自动发布到 Cloudflare**（GitHub Secrets 未授权），新提交代码不会自动上线，需要执行部署或通过 Cloudflare API 推送。不可将任何 API Token、密钥提交进仓库。
 
-- P1：配置可靠的用户认证、任务队列、数据库、R2 和积分账本；接入文本模型，完成一句话图文/批量图文/作品管理。
-- P2：接入图片模型、编辑能力、更多本地图片工具。
-- P3：电商商拍/套图/详情页，后端异步批处理。
-- P4：文生/图生视频，视频任务进度与下载。
+## 当前部署与验收
 
-> 原站功能参考可以帮助确定需求，但本站不会照搬原站品牌、图片和其他受保护资产。
+- AI 文案：真实推理，结构化返回，写入 D1，支持 PATCH 保存修改
+- R2 图片：浏览器 Canvas 导出 WebP，上传私有对象并成功读取，历史中可查询
+- 批量任务：Queue 消费2篇，D1 `done` 状态、2篇长文生成与历史记录均通过端到端测试
+- 手机端：首页已通过375px浏览器宽度无横向溢出检查
+
+`migrations/` 收录所有已在 Cloudflare D1 环境执行的初始化 SQL。
