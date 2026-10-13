@@ -22,8 +22,16 @@ assert.ok(html.includes('my-works'));
 assert.ok(html.includes('/editor-app.js'));
 const {EDITOR_CLIENT}=await import('../src/editor-client.js');
 new Script(EDITOR_CLIENT,{filename:'editor-app.js'});
+assert.ok(EDITOR_CLIENT.includes("AI视觉底图 + 浏览器精准中文铺字"));
+assert.ok(EDITOR_CLIENT.includes("'/api/assets" )||EDITOR_CLIENT.includes("/api/assets"));
+assert.ok(EDITOR_CLIENT.includes('高级杂志暖'));
+
 const {XHS_CLIENT}=await import('../src/xhs-client.js');
 new Script(XHS_CLIENT,{filename:'xhs-app.js'});
+assert.ok(XHS_CLIENT.includes('xhs-image-mode'));
+assert.ok(XHS_CLIENT.includes('xhs-style-lock'));
+assert.ok(XHS_CLIENT.includes("form.append('mode'"));
+
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
 const {parseXhsHtml,extractSharedUrl}=await import('../src/xhs.js');
@@ -131,4 +139,4 @@ try{
 }finally{globalThis.fetch=realFetch;}
 assert.equal(tools.filter(x=>x.id==='tool-18'&&x.mode==='image-generate').length,1);
 assert.equal(tools.filter(x=>x.mode==='multi-editor').length,2);
-console.log('PASS: separate group-bound text/image keys, distinct model endpoints, Worker modules, client browser script, 46 tools, 6 real AI text entries, D1/R2/AI bindings');
+console.log('PASS: background-only image remix, style lock, R2 editor photos, separate group-bound text/image keys, distinct model endpoints, Worker modules, client browser script, 46 tools, 6 real AI text entries, D1/R2/AI bindings');
