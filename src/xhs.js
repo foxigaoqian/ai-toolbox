@@ -203,7 +203,7 @@ async function resolve(req,env){
   }
   const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function imageProxy(req){
