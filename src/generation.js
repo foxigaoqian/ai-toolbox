@@ -59,3 +59,5 @@ async function updateWork(req,env,id){
 }
 
 export async function handleApi(req,env){const p=new URL(req.url).pathname;if(p==='/api/generate'&&req.method==='POST')return generate(req,env);if(p==='/api/works'&&req.method==='GET')return history(req,env);if(p==='/api/assets'&&req.method==='POST')return upload(req,env);const w=p.match(/^\/api\/works\/([a-f0-9-]{36})$/);if(w&&req.method==='PATCH')return updateWork(req,env,w[1]);const a=p.match(/^\/api\/assets\/([a-f0-9-]{36})$/);if(a&&req.method==='GET')return getAsset(req,env,a[1]);return null;}
+
+export {parse as parseAiResponse};
