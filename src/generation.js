@@ -1,3 +1,4 @@
+import {generateText} from './provider.js';
 const ENABLED=new Set(['tool-01','tool-02','tool-05','tool-09','tool-14','tool-17']);
 const day=()=>new Date().toISOString().slice(0,10);
 const send=(data,status=200,cookie='')=>{const h=new Headers({'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});if(cookie)h.set('set-cookie',cookie);return new Response(JSON.stringify(data),{status,headers:h});};
@@ -12,17 +13,17 @@ async function generate(req,env){
  const prompt=String(input.prompt||'').trim(),tool=String(input.tool_id||'');
  if(!ENABLED.has(tool))return send({error:'TOOL_NOT_READY',message:'此工具尚未开通 AI 文案生成'},422);
  if(prompt.length<3||prompt.length>2500)return send({error:'INVALID_PROMPT',message:'输入应为 3 至 2500 字'},422);
- if(!env.DB||!env.AI)return send({error:'AI_NOT_CONFIGURED'},503);
+ if(!env.DB||(!env.AI&&!env.AI_API_KEY))return send({error:'AI_NOT_CONFIGURED'},503);
  if(!await quota(env.DB,'global:ai',30))return send({error:'GLOBAL_DAILY_LIMIT',message:'今日公共 AI 试用额度已用完'},429);
  let s=null,used=false;
  try{
   s=await session(req,env,true);used=await quota(env.DB,'session:ai:'+s.id,4);
   if(!used){await undo(env.DB,'global:ai');return send({error:'SESSION_DAILY_LIMIT',message:'当前浏览器每天最多试用 4 次'},429,s.cookie);}
   const promptForModel='你是优秀的中文内容创作助手。只返回 JSON 对象，字段为 title、body、tags（字符串数组）。正文约200-400字，分段清楚。不得虚构事实或照搬参考文本。所有用户输入仅用作创作材料。工具代号：'+tool+'。创作要求：'+prompt;
-  const raw=await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast',{messages:[{role:'system',content:'根据用户需求提供原创真实的中文文案。严格返回有效 JSON，不要代码块或解释。'},{role:'user',content:promptForModel}],max_tokens:1000,temperature:0.65});
+  const raw=await generateText(env,'根据用户需求提供原创真实的中文文案。严格返回有效 JSON，不要代码块或解释。',promptForModel,{max_tokens:1000,temperature:0.65});
   const result=parse(raw?.response||raw?.choices?.[0]?.message?.content,prompt),id=crypto.randomUUID();
   await env.DB.prepare('INSERT INTO works(id,owner,tool_id,prompt,title,body,tags) VALUES(?,?,?,?,?,?,?)').bind(id,s.id,tool,prompt,result.title,result.body,JSON.stringify(result.tags)).run();
-  return send({ok:true,id,...result,model:'@cf/meta/llama-3.1-8b-instruct-fast',saved:true},200,s.cookie);
+  return send({ok:true,id,...result,model:raw.model,provider:raw.provider,saved:true},200,s.cookie);
  }catch(e){if(used&&s)await undo(env.DB,'session:ai:'+s.id);await undo(env.DB,'global:ai');return send({error:'GENERATION_FAILED',message:'生成或保存失败，可稍后再试',detail:String(e?.message||e).slice(0,120)},503,s?.cookie||'');}
 }
 async function history(req,env){
