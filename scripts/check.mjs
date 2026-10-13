@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {Script} from 'node:vm';
-for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
+for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
 const source=readFileSync('src/index.js','utf8');
 const a=source.indexOf('const TOOLS=')+'const TOOLS='.length;
 const b=source.indexOf(';\nconst HTML=',a);
@@ -22,6 +22,23 @@ assert.ok(html.includes('my-works'));
 assert.ok(html.includes('/editor-app.js'));
 const {EDITOR_CLIENT}=await import('../src/editor-client.js');
 new Script(EDITOR_CLIENT,{filename:'editor-app.js'});
+const {XHS_CLIENT}=await import('../src/xhs-client.js');
+new Script(XHS_CLIENT,{filename:'xhs-app.js'});
+assert.ok(html.includes('/xhs-app.js'));
+assert.ok(html.includes('window.xhsTransferToEditor'));
+const {parseXhsHtml}=await import('../src/xhs.js');
+const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
+  '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
+  '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+
+  '<script type="application/ld+json">'+JSON.stringify({headline:'生活指南',articleBody:'每天15分钟整理桌面',image:'https://sns-webpic-qc.xhscdn.com/image2.webp'})+'</script>';
+const note=parseXhsHtml(fixture,'https://www.xiaohongshu.com/explore/123');
+assert.ok(note.title.includes('通勤整理技巧'));
+assert.ok(note.description.includes('每天15分钟整理桌面')||note.description.includes('整理桌面'));
+assert.ok(note.images.length>=2);
+const empty=parseXhsHtml('<html><head><title>Login</title></head></html>');
+assert.equal(empty.description,'');
+assert.equal(empty.images.length,0);
+
 const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
 assert.equal(cfg.ai.binding,'AI');
 assert.equal(cfg.d1_databases[0].binding,'DB');
