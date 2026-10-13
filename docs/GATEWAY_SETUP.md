@@ -1,35 +1,63 @@
-# 中转站 API Key 接入说明（Cloudflare Workers）
+# Square API 双 Key 配置 — ai-toolbox V0.4
 
-## 第一步：在 Cloudflare 填写
+你已经在 Square API 控制台创建了两把不同分组的 Key。这是正确做法。**一个 Key 不需要、也不一定能够跨分组调用所有模型。**
 
-Cloudflare Dashboard → Workers & Pages → ai-toolbox → Settings → Variables and Secrets → Add
+## 1. Cloudflare Workers 设置
 
-| 类型 | Variable name | Value |
+打开 Cloudflare Dashboard → Workers & Pages → **ai-toolbox** → Settings → Variables and Secrets → Add。
+
+| 变量名 | 类型 | 填写什么 |
 | --- | --- | --- |
-| Secret | AI_API_KEY | 中转站 Token，直接填 sk- 开头的完整值（如果服务商是这种格式） |
-| Text 或 Secret | AI_BASE_URL | 官方 OpenAI 兼容 Base URL，例如 https://你的中转域名/v1 |
-| Text 或 Secret | AI_TEXT_MODEL | 控制台给出的完整模型 ID |
+| `AI_TEXT_API_KEY` | **Secret** | Square API 里名称为 **text**、分组 **ds-v4.1可用** 的完整 Key |
+| `AI_IMAGE_API_KEY` | **Secret** | 名称为 **image-2**、分组 **gpt-image-2** 的完整 Key |
+| `AI_BASE_URL` | Text | 该服务的 OpenAI 兼容 Base URL，先从站内「API 地址」按钮确认（常见为 `https://api.sqface.sbs/v1`） |
+| `AI_TEXT_MODEL` | Text | `deepseek-v4.1-flash` |
+| `AI_IMAGE_MODEL` | Text | `gpt-image-2.5`（该分组公开列表已包含；如模型路由不通可测试 `gpt-image-2`） |
 
-请用你实际中转站的 API 域名及支持的模型名替换占位示例。保存变量后，按 Cloudflare 的提示部署新版本。
+如果图片服务提供的 Base URL 与文字不同，可另加 `AI_IMAGE_BASE_URL`；否则**共用** `AI_BASE_URL` 即可。文字也可使用 `AI_TEXT_BASE_URL` 单独覆盖地址。
 
-## 第二步：检查是否成功
+**不要**复制截图中的部分掩码 Key；请在中转站自己点击复制完整 Key，直接粘贴到 Cloudflare Secret。不要粘贴到 GitHub 或聊天消息中。
 
-打开 https://ai-toolbox.foxigaoqian-soocly.workers.dev/api/config
+Cloudflare 保存设置后按界面提示部署/生效。若选择了 Secret，请确保 Secret 已与当前 Worker 版本关联。
 
-- provider 应为 openai-compatible
-- gatewayConfigured 应为 true
-- textModel 应为你选择的模型名
+## 2. 生效检查
 
-接口绝不返回 Key。若没有配置 Key，则继续使用 Cloudflare Workers AI。
+访问 [公开配置检查接口](https://ai-toolbox.foxigaoqian-soocly.workers.dev/api/config)。
 
-## 工作原理
+预期输出中的公开状态：
+- `textConfigured: true`：文字 Key + Base URL 可用（只是配置检测，不是推理成功证明）
+- `imageConfigured: true`：图片 Key + Base URL 可用
+- `textModel: "deepseek-v4.1-flash"`
+- `imageModel: "gpt-image-2.5"`
 
-后端在 AI_API_KEY、AI_BASE_URL、AI_TEXT_MODEL 全部齐备时调用 OpenAI 兼容 /chat/completions。单篇 AI 文案和后台队列批量生成共用这个配置。图片和视频生成仍需后续适配，不会因为配置了文本模型就全部启用。
+这里不会返回密钥，也不会返回任何 Key 的部分值。配置正确后，进入「一句话图文」和「AI设计好图」分别执行小额请求测试，核对中转站使用日志是否落在 **text** 和 **image-2** 对应的令牌上。
 
-## 注意
+## 3. 程序如何区分 Key
 
-不要将 Key 放在 GitHub、前端 JS、公开截图或聊天消息中。创建专用 Token 并限制额度；当前项目为匿名公共试用。配置了 Key 但缺失 URL 或模型时会报 GATEWAY_CONFIG_INCOMPLETE，不会自动切换别的收费渠道。
+- 文案 / 批量文案：读取 `AI_TEXT_API_KEY`，请求 `/chat/completions`，模型 `AI_TEXT_MODEL`。
+- AI 生成图片：读取 `AI_IMAGE_API_KEY`，请求 `/images/generations`，模型 `AI_IMAGE_MODEL`。
+- Cloudflare Workers AI：文字 Key 未配置时的默认备用路径；**不会**擅自用文字 Key 来生成图片。
+- 旧版 `AI_API_KEY` 只作为**文字**兼容变量。已使用 `AI_TEXT_API_KEY` 时优先读取新变量。
+- Key 权限限制来自中转站的 Token 分组，代码不自行伪造或切换分组。
 
-常见错误：GATEWAY_HTTP_401（Token 不正确）；GATEWAY_HTTP_403（权限）；GATEWAY_HTTP_404（URL 或模型）；GATEWAY_HTTP_429（限流）；GATEWAY_NETWORK_FAILED（网络问题）。
+## 4. 费用与验收
 
-若不知道 Base URL，提供中转站的官网或 API 文档链接即可，不要提供 Key。
+图片接口目前是实验性功能，公共试用设定：每浏览器 2 张/天，全站最多 10 张/天。正式对外运营前应加入账号、额度计费、取消与队列等能力。
+
+兼容 OpenAI 的图片端点不代表每个自定义图片模型都能处理所有尺寸或返回格式：
+- 程序已适配 `b64_json` 图片输出或临时 HTTPS 图片链接。
+- Base64 图片会写入私有 Cloudflare R2；临时外链结果需要及时下载。
+- 图片生成功能需填入自己的真实 Key 并成功调用后才能证明最终兼容性。
+- 视频模型和原图编辑仍未接入。
+
+## 5. 出错排查
+
+- `IMAGE_KEY_REQUIRED`：未配置图片组专属 Key 或 Base URL
+- `IMAGE_HTTP_401`：图片 Key 无效
+- `IMAGE_HTTP_403`：图片 Key 无权限
+- `IMAGE_HTTP_404`：模型 ID 或图片接口不匹配
+- `IMAGE_HTTP_429`：中转站限流
+- `IMAGE_EMPTY_RESPONSE`：返回结构非兼容图片格式
+- `GATEWAY_HTTP_401`：文字 Key 有问题
+
+图文多页编辑器无需图片生成 Key 即可使用，但真正的 AI 配图必须配置图片 Key。
