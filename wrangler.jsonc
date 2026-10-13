@@ -2,5 +2,21 @@
   "name": "ai-toolbox",
   "main": "src/index.js",
   "compatibility_date": "2026-10-13",
-  "workers_dev": true
+  "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-toolbox-content",
+      "database_id": "a8115f5c-cdcb-439b-9a7d-b3961b7ca626"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "ai-toolbox-assets"
+    }
+  ]
 }
