@@ -18,5 +18,5 @@ const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
 assert.ok(scripts.length >= 1, 'browser application script');
 new Script(scripts.at(-1)[1], { filename: 'client.js' });
 for (const t of tools) assert.ok(html.includes(t.title) || html.includes('tool-data'), 'tool registry loaded');
-assert.equal(tools.filter(t => t.status === 'ready').length, 7, '7 first-batch local tools');
+assert.equal(tools.filter(t => t.status === 'ready').length, 8, '8 first-batch local tools');
 console.log('PASS: Worker + browser syntax, 46 unique entries, categories, and 7 local tools');
