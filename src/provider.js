@@ -111,7 +111,7 @@ export async function generateText(env,system,user,options={}){
    reply=await fetch(url,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(40000),
     headers:{authorization:'Bearer '+textKey(env),'content-type':'application/json'},
     body:JSON.stringify({model:textModel(env),messages:[{role:'system',content:system},{role:'user',content:user}],
-       max_tokens,temperature,stream:false})});
+       max_tokens,temperature,stream:textModel(env)==='deepseek-v4.1-flash'})});
    }catch(e){
    const name=String(e?.name||'Error').replace(/[^a-zA-Z]/g,'').slice(0,28);
    throw Error(name==='TimeoutError'||name==='AbortError'?'GATEWAY_TIMEOUT':'GATEWAY_NETWORK_FAILED_'+name);
