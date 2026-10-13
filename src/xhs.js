@@ -23,7 +23,7 @@ function validImage(href){
  if(h==='ci.xiaohongshu.com'||h==='sns-avatar-qc.xhscdn.com'||IMG_HOST_SUFFIX.some(s=>h.endsWith(s))||h==='xhscdn.com'||h==='xhscdn.net')return u.toString();
  return null;
 }
-function extractSharedUrl(input){
+export function extractSharedUrl(input){
  const text=String(input||'').trim();
  const tokens=text.match(/https?:\/\/[^\s<>"'，。]+/g)||[];
  const found=tokens.map(t=>t.replace(/[)\]）】,;]+$/,'')).find(t=>validXhs(t));return found?validXhs(found).toString():null;
@@ -146,8 +146,15 @@ async function imageProxy(req){
   if(!['image/png','image/jpeg','image/webp','image/avif'].includes(mime))return new Response('Unsupported image',{status:415});
   const max=6*1024*1024,sz=Number(r.headers.get('content-length')||0);
   if(sz>max)return new Response('Image too large',{status:413});
-  const buf=await r.arrayBuffer();if(buf.byteLength>max||buf.byteLength<40)return new Response('Image too large',{status:413});
-  const x=new Uint8Array(buf);const validMagic=mime==='image/jpeg'?x[0]===255&&x[1]===216:mime==='image/png'?x[0]===137&&x[1]===80:mime==='image/webp'?new TextDecoder().decode(x.slice(0,4))==='RIFF':new TextDecoder().decode(x.slice(4,12)).includes('avif');
+  const chunks=[];let total=0;const stream=r.body?.getReader();
+  if(!stream)return new Response('Image unavailable',{status:404});
+  for(;;){const v=await stream.read();if(v.done)break;total+=v.value.length;
+    if(total>max){await stream.cancel();return new Response('Image too large',{status:413})}
+    chunks.push(v.value)}
+  if(total<40)return new Response('Invalid image',{status:415});
+  const x=new Uint8Array(total);let cursor=0;
+  for(const part of chunks){x.set(part,cursor);cursor+=part.length}
+  const buf=x.buffer;const validMagic=mime==='image/jpeg'?x[0]===255&&x[1]===216:mime==='image/png'?x[0]===137&&x[1]===80:mime==='image/webp'?new TextDecoder().decode(x.slice(0,4))==='RIFF':new TextDecoder().decode(x.slice(4,12)).includes('avif');
   if(!validMagic)return new Response('Invalid image',{status:415});
   return new Response(buf,{headers:{'content-type':mime,'cache-control':'public,max-age=900','x-content-type-options':'nosniff','cross-origin-resource-policy':'same-origin'}});
  }catch{return new Response('Source image unavailable',{status:404})}
