@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `AI_TEXT_API_KEY` | **Secret** | Square API 里名称为 **text**、分组 **ds-v4.1可用** 的完整 Key |
 | `AI_IMAGE_API_KEY` | **Secret** | 名称为 **image-2**、分组 **gpt-image-2** 的完整 Key |
-| `AI_BASE_URL` | Text | 该服务的 OpenAI 兼容 Base URL，先从站内「API 地址」按钮确认（常见为 `https://api.sqface.sbs/v1`） |
+| `AI_BASE_URL` | Text | **`https://api.sqface.sbs/v1`**（已验证该域名的文本和图片接口存在，未带 Key 返回 401） |
 | `AI_TEXT_MODEL` | Text | `deepseek-v4.1-flash` |
 | `AI_IMAGE_MODEL` | Text | `gpt-image-2.5`（该分组公开列表已包含；如模型路由不通可测试 `gpt-image-2`） |
 
