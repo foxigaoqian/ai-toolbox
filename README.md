@@ -6,10 +6,10 @@
 
 https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
-## V0.2 真实可用能力
+## V0.3 真实可用能力
 
-- **8 个浏览器本地工具：** 指定文案图文、单篇大字报、热门标题规则生成、封面设计、图片裁剪、调整尺寸、压缩、拼图。
-- **6 个真实 AI 文案入口：** 一句话图文、同款参考仿写（粘贴参考内容）、多内容仿写、人设图文、爆款文案、公众号长图文的文案生成功能。模型：Cloudflare Workers AI Llama 3.1 8B Fast。
+- **10 个浏览器本地工具：** 指定文案图文、单篇大字报、热门标题规则生成、封面设计、图片裁剪、调整尺寸、压缩、拼图，新增自由设计图文及自定义多页图文编辑器（4种主题、最多8页、高清 PNG 和 ZIP 导出）。
+- **6 个真实 AI 文案入口：** 一句话图文、同款参考仿写（粘贴参考内容）、多内容仿写、人设图文、爆款文案、公众号长图文的文案生成功能。模型：默认 Cloudflare Workers AI Llama 3.1 8B Fast；可通过 Cloudflare Secret 配置 OpenAI 兼容中转站。
 - **2 个真实后台批量入口：** AI 批量超级图文、批量大字报图文（当前为每行主题分别生成**文案**，不是自动完整生图；2–4篇/任务）。
 - **作品中心：** D1 存储生成文案，支持修改后持久化、查看历史；图片可手动保存到私有 R2 桶，并从同浏览器找回。
 - **Cloudflare Queues：** 批量任务由后台消费并保存到 D1，可按任务 ID 查询进度。用户无需持续保持页面开启。
@@ -27,6 +27,10 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 - 素材：私有 Cloudflare R2，所有 GET 均校验会话与 owner
 - 模型：Workers AI `@cf/meta/llama-3.1-8b-instruct-fast`
 - 数据保护：服务端验证入参、图片 magic bytes 校验、D1 参数绑定、同源会话 Cookie 与全局预算上限
+
+## 中转站 API Key 配置
+
+请阅读 [Cloudflare Secret 配置教程](docs/GATEWAY_SETUP.md)。在 Cloudflare Workers 的 Settings → Variables and Secrets 设置 AI_API_KEY（Secret）、AI_BASE_URL（Text）、AI_TEXT_MODEL（Text）。不要提交 Key 到 GitHub。具体模型与 URL 以中转站官方文档为准。
 
 ## 主要 API
 
@@ -66,7 +70,7 @@ GitHub Actions 只进行语法和注册表校验，**尚未配置自动发布到
 
 ## 当前部署与验收
 
-- AI 文案：真实推理，结构化返回，写入 D1，支持 PATCH 保存修改
+- AI 文案：真实推理（支持配置外部 OpenAI 兼容中转站），结构化返回，写入 D1，支持 PATCH 保存修改
 - R2 图片：浏览器 Canvas 导出 WebP，上传私有对象并成功读取，历史中可查询
 - 批量任务：Queue 消费2篇，D1 `done` 状态、2篇长文生成与历史记录均通过端到端测试
 - 手机端：首页已通过375px浏览器宽度无横向溢出检查
