@@ -87,7 +87,7 @@ const {parseAiResponse}=await import('../src/generation.js');
 const structured=parseAiResponse({title:'测试',body:'这是一段来自结构化响应的正文。',tags:['示例']},'提示词');
 assert.equal(structured.body,'这是一段来自结构化响应的正文。');
 assert.equal(parseAiResponse('{"title":"另一个","body":"来自 JSON 文本的完整正文内容","tags":[]}','原文').title,'另一个');
-const {chatEndpoint,imageEndpoint,providerStatus,generateText,generateImage,decodeGatewaySSE,decodeGatewayText}=await import('../src/provider.js');
+const {chatEndpoint,imageEndpoint,imageEditEndpoint,remakeImage,providerStatus,generateText,generateImage,decodeGatewaySSE,decodeGatewayText}=await import('../src/provider.js');
 assert.equal(decodeGatewaySSE('data: {"choices":[{"delta":{"content":"你好"}}]}\\n\\ndata: {"choices":[{"delta":{"content":"，秋天"}}]}\\n\\ndata: [DONE]'.replaceAll('\\n','\n')),'你好，秋天');
 assert.equal(decodeGatewayText({choices:[{message:{content:'普通 JSON 文案'}}]}),'普通 JSON 文案');
 assert.equal(chatEndpoint('https://api.example.com/v1'),'https://api.example.com/v1/chat/completions');
@@ -100,12 +100,13 @@ assert.equal(providerStatus({AI_TEXT_API_KEY:'textSecret',AI_IMAGE_API_KEY:'imag
 assert.equal(providerStatus({AI_API_KEY:'legacy',AI_BASE_URL:'https://api.example.com/v1'}).gatewayConfigured,true);
 assert.equal(providerStatus({AI_TEXT_API_KEY:'onlyText',AI_BASE_URL:'https://api.example.com/v1'}).imageConfigured,false);
 assert.equal(imageEndpoint('https://api.example.com/v1'),'https://api.example.com/v1/images/generations');
+assert.equal(imageEditEndpoint('https://api.example.com/v1'),'https://api.example.com/v1/images/edits');
 assert.throws(()=>imageEndpoint('http://localhost/v1'));
 let fakeCalls=[];const realFetch=globalThis.fetch;
 try{
  globalThis.fetch=async (url,opts)=>{
-  fakeCalls.push({url,authorization:opts.headers.authorization,body:JSON.parse(opts.body),redirect:opts.redirect});
-  if(url.endsWith('/images/generations'))return {ok:true,json:async()=>({data:[{b64_json:'a'.repeat(60)}]})};
+  fakeCalls.push({url,authorization:opts.headers.authorization,body:opts.body instanceof FormData?{model:opts.body.get('model'),hasImage:!!opts.body.get('image')}:JSON.parse(opts.body),redirect:opts.redirect});
+  if(url.endsWith('/images/generations')||url.endsWith('/images/edits'))return {ok:true,json:async()=>({data:[{b64_json:'a'.repeat(60)}]})};
   return {ok:true,json:async()=>({choices:[{message:{content:'{"title":"真实回复"}'}}]})};
  };
  const env={AI_TEXT_API_KEY:'onlyText',AI_IMAGE_API_KEY:'onlyImage',AI_BASE_URL:'https://api.example.com/v1',AI_TEXT_MODEL:'deepseek-v4.1-flash',AI_IMAGE_MODEL:'gpt-image-2.5'};
@@ -116,6 +117,14 @@ try{
  assert.equal(fakeCalls[1].redirect,'manual');
  assert.equal(fakeCalls[0].body.model,'deepseek-v4.1-flash');
  assert.equal(fakeCalls[1].authorization,'Bearer onlyImage');
+ const fakeFile=new Blob([new Uint8Array([137,80,78,71,13,10,26,10,1,2,3,4])],{type:'image/png'});
+ fakeFile.name='reference.png';
+ await remakeImage(env,fakeFile,'Create a new original version of this reference with cream colors and modern layout',{size:'1024x1536'});
+ assert.ok(fakeCalls[2].url.endsWith('/images/edits'));
+ assert.equal(fakeCalls[2].authorization,'Bearer onlyImage');
+ assert.equal(fakeCalls[2].body.model,'gpt-image-2.5');
+ assert.equal(fakeCalls[2].body.hasImage,true);
+
  assert.equal(fakeCalls[1].body.model,'gpt-image-2.5');
  assert.ok(fakeCalls[0].url.endsWith('/chat/completions'));
  assert.ok(fakeCalls[1].url.endsWith('/images/generations'));
