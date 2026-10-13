@@ -6,7 +6,7 @@
 
 https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
-## V0.3 真实可用能力
+## V0.4 真实可用能力
 
 - **10 个浏览器本地工具：** 指定文案图文、单篇大字报、热门标题规则生成、封面设计、图片裁剪、调整尺寸、压缩、拼图，新增自由设计图文及自定义多页图文编辑器（4种主题、最多8页、高清 PNG 和 ZIP 导出）。
 - **6 个真实 AI 文案入口：** 一句话图文、同款参考仿写（粘贴参考内容）、多内容仿写、人设图文、爆款文案、公众号长图文的文案生成功能。模型：默认 Cloudflare Workers AI Llama 3.1 8B Fast；可通过 Cloudflare Secret 配置 OpenAI 兼容中转站。
@@ -18,6 +18,18 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 **尚未完成：** 正式邮箱用户登录/跨设备账号、收费积分、AI 图片生成与修图、电商套图、视频生成、图文自动多页设计及发布。剩余入口会显示未接入，不会伪造 AI 结果。
 
 **隐私注意：** 目前是匿名会话，靠 Secure、HttpOnly Cookie 识别，每次生成自动绑定该浏览器。更换设备、清除 Cookie 或会话过期后无法访问原来的私人作品；需要长期保存请下载本地。正式账号系统将在后续开发。
+
+## V0.4 双分组 Key 接入
+
+现在支持 **两把独立的中转站 Key**：
+
+- `AI_TEXT_API_KEY`（Secret）→ 截图 `text` / `ds-v4.1可用` 分组 → `AI_TEXT_MODEL=deepseek-v4.1-flash` → `/v1/chat/completions`
+- `AI_IMAGE_API_KEY`（Secret）→ 截图 `image-2` / `gpt-image-2` 分组 → `AI_IMAGE_MODEL=gpt-image-2.5` → `/v1/images/generations`
+- `AI_BASE_URL=https://api.sqface.sbs/v1` 两种接口共用网关地址；模型与 Key 各自独立。
+
+在未设置图片 Secret 前生图功能**自动禁用**，不会使用文字 Token 代替。配置图片 Secret 后新增真实生图 API `POST /api/images/generate`；支持生成结果私有 R2 保存（当供应商返回 base64），限全站每日10张/单浏览器2张。尚未提供实际 Token，因此仅完成公开接口与无 Key 安全测试，不能宣称已验证供应商的带 Key 生图成功。
+
+[详细填写教程](docs/GATEWAY_SETUP.md)。
 
 ## 架构
 
@@ -70,7 +82,7 @@ GitHub Actions 只进行语法和注册表校验，**尚未配置自动发布到
 
 ## 当前部署与验收
 
-- AI 文案：真实推理（支持配置外部 OpenAI 兼容中转站），结构化返回，写入 D1，支持 PATCH 保存修改
+- AI 文案：真实推理（支持配置外部 OpenAI 兼容中转站的独立文字 Key），结构化返回，写入 D1，支持 PATCH 保存修改
 - R2 图片：浏览器 Canvas 导出 WebP，上传私有对象并成功读取，历史中可查询
 - 批量任务：Queue 消费2篇，D1 `done` 状态、2篇长文生成与历史记录均通过端到端测试
 - 手机端：首页已通过375px浏览器宽度无横向溢出检查
