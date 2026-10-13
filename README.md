@@ -6,7 +6,7 @@
 
 https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
-## V0.5 真实可用能力
+## V0.6 真实可用能力
 
 - **10 个浏览器本地工具：** 指定文案图文、单篇大字报、热门标题规则生成、封面设计、图片裁剪、调整尺寸、压缩、拼图，新增自由设计图文及自定义多页图文编辑器（4种主题、最多8页、高清 PNG 和 ZIP 导出）。
 - **6 个真实 AI 文案入口：** 一句话图文、同款参考仿写（粘贴参考内容）、多内容仿写、人设图文、爆款文案、公众号长图文的文案生成功能。模型：默认 Cloudflare Workers AI Llama 3.1 8B Fast；可通过 Cloudflare Secret 配置 OpenAI 兼容中转站。
@@ -19,7 +19,7 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
 **隐私注意：** 目前是匿名会话，靠 Secure、HttpOnly Cookie 识别，每次生成自动绑定该浏览器。更换设备、清除 Cookie 或会话过期后无法访问原来的私人作品；需要长期保存请下载本地。正式账号系统将在后续开发。
 
-## V0.5 双分组 Key 接入
+## V0.6 双分组 Key 接入
 
 现在支持 **两把独立的中转站 Key**：
 
@@ -31,7 +31,7 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
 [详细填写教程](docs/GATEWAY_SETUP.md)。
 
-## V0.5 小红书公开笔记复刻
+## V0.6 小红书公开笔记复刻
 
 进入首页 **AI 图文 → AI复刻同款图文**（`?tool=tool-02`）：
 
@@ -46,6 +46,20 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 **版权提醒：** 原帖图片和文字属于其相应权利人；应使用自己有权使用的素材，改写后的文案不得假冒原作者。网站不会保证“原图无损下载”或批量复制整篇作品。
 
 接口：`POST /api/xhs/resolve`、`GET /api/xhs/image?url=...`。可用测试：`node scripts/check.mjs`。
+
+## V0.6 小红书解析增强（开源项目适配）
+
+参考 [ShareXtract](https://github.com/wuaishare/sharextract) 的公开笔记 SSR 解析器：
+[源代码](https://github.com/wuaishare/sharextract/blob/main/sharextract/extractors/xiaohongshu.py)，Apache-2.0。原生 JS 适配位于 \`src/xhs-ssr.js\`，开源许可证见 \`licenses/sharextract-APACHE-2.0.txt\`。
+
+解析优先级：
+1. 校验用户的公开分享 URL（保留该笔记自身 xsec_token，不生成/更新签名）。
+2. 先在普通 HTTPS 页面解析 \`window.__INITIAL_STATE__.note.noteDetailMap[noteId].note\`，提取标题、正文、原帖 imageList（最多 9 张，保序）。失败则回退公开 OG 元信息。
+3. HTTP 请求如果被转登录页，再尝试同一个笔记官方 URL 的 \`/explore/\`、\`/discovery/item/\` 两种路径。
+4. 如果仍被拦截，调用已绑定的 Cloudflare Browser Run \`BROWSER.quickAction('content', ...)\`，从匿名浏览器公开页面解析 SSR/元数据。**不需要额外 API Token**，但消耗 Cloudflare Browser Run 浏览器时长与速率配额。
+5. 浏览器备用限流：全站 10 次/天、同一匿名浏览器 3 次/天。429 时明确提示 Cloudflare 额度/限流，绝不误认登录页标题为帖子标题。
+
+**重要**：自动解析不是 100% 保证；Cloudflare Worker 的普通 HTTP 请求仍可能被小红书重定向到 \`/login\`。浏览器渲染在当前账号的连续测试中遇到过 **HTTP 429**，所以真实笔记全图/全文抓取仍需在 Browser Run 速率恢复后复验。不得宣称这两条真实用户链接已成功获取。未获取到原帖素材时仍有手动导入兜底，保留内容授权提醒。
 
 ## 架构
 
