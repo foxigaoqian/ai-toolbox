@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {Script} from 'node:vm';
-for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
+for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js','src/xhs-ssr.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
 const source=readFileSync('src/index.js','utf8');
 const a=source.indexOf('const TOOLS=')+'const TOOLS='.length;
 const b=source.indexOf(';\nconst HTML=',a);
@@ -33,6 +33,34 @@ const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
   '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+
   '<script type="application/ld+json">'+JSON.stringify({headline:'生活指南',articleBody:'每天15分钟整理桌面',image:'https://sns-webpic-qc.xhscdn.com/image2.webp'})+'</script>';
+
+const {parseXhsSsr,extractInitialState,canonicalShareUrl}=await import('../src/xhs-ssr.js');
+const noteId='6ab923d4000000001402dc11';
+const noteURL='https://www.xiaohongshu.com/discovery/item/'+noteId+'?source=webshare&xsec_token=exampleShare%3D&xsec_source=pc_share';
+const src={
+ global:{example:null,literal:'undefined stays in strings'},
+ note:{noteDetailMap:{[noteId]:{note:{
+   noteId,title:'真心想录用你的公司，会释放这些信号',
+   desc:'发现招聘公司认真对待候选人的几个细节',
+   user:{nickname:'深耕表达力'},
+   imageList:[
+    {urlDefault:'https://sns-webpic-qc.xhscdn.com/photo-cover.jpg'},
+    {infoList:[{imageScene:'WB_DFT',url:'https://sns-webpic-qc.xhscdn.com/photo2.jpg'}]}
+   ]
+ }}}}
+};
+const rawState=JSON.stringify(src).replace('"example":null','"example":undefined');
+const ssrHtml='<script>window.__INITIAL_STATE__='+rawState+';</script>';
+const extracted=parseXhsSsr(ssrHtml,noteURL);
+assert.equal(extracted.title,'真心想录用你的公司，会释放这些信号');
+assert.equal(extracted.author,'深耕表达力');
+assert.equal(extracted.images.length,2);
+assert.ok(extracted.description.includes('招聘公司'));
+assert.equal(extractInitialState(ssrHtml).global.example,null);
+assert.equal(extractInitialState(ssrHtml).global.literal,'undefined stays in strings');
+assert.equal(canonicalShareUrl(noteURL,'explore'),'https://www.xiaohongshu.com/explore/'+noteId+'?xsec_token=exampleShare%3D&xsec_source=pc_share');
+assert.throws(()=>parseXhsSsr('<title>想了解些什么？</title>',noteURL),/XHS_SSR_ABSENT/);
+
 const note=parseXhsHtml(fixture,'https://www.xiaohongshu.com/explore/123');
 assert.ok(note.title.includes('通勤整理技巧'));
 assert.ok(note.description.includes('每天15分钟整理桌面')||note.description.includes('整理桌面'));
