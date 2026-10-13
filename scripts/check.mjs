@@ -33,6 +33,7 @@ assert.equal(structured.body,'这是一段来自结构化响应的正文。');
 assert.equal(parseAiResponse('{"title":"另一个","body":"来自 JSON 文本的完整正文内容","tags":[]}','原文').title,'另一个');
 const {chatEndpoint,imageEndpoint,providerStatus,generateText,generateImage}=await import('../src/provider.js');
 assert.equal(chatEndpoint('https://api.example.com/v1'),'https://api.example.com/v1/chat/completions');
+assert.equal(chatEndpoint('https://api.example.com'),'https://api.example.com/v1/chat/completions');
 assert.equal(chatEndpoint('https://api.example.com/v1/chat/completions'),'https://api.example.com/v1/chat/completions');
 assert.throws(()=>chatEndpoint('http://localhost:8787/v1'));
 assert.equal(providerStatus({}).provider,'workers-ai');
@@ -45,7 +46,7 @@ assert.throws(()=>imageEndpoint('http://localhost/v1'));
 let fakeCalls=[];const realFetch=globalThis.fetch;
 try{
  globalThis.fetch=async (url,opts)=>{
-  fakeCalls.push({url,authorization:opts.headers.authorization,body:JSON.parse(opts.body)});
+  fakeCalls.push({url,authorization:opts.headers.authorization,body:JSON.parse(opts.body),redirect:opts.redirect});
   if(url.endsWith('/images/generations'))return {ok:true,json:async()=>({data:[{b64_json:'a'.repeat(60)}]})};
   return {ok:true,json:async()=>({choices:[{message:{content:'{"title":"真实回复"}'}}]})};
  };
@@ -53,6 +54,8 @@ try{
  await generateText(env,'sys','input');
  await generateImage(env,'a peaceful mountain landscape');
  assert.equal(fakeCalls[0].authorization,'Bearer onlyText');
+ assert.equal(fakeCalls[0].redirect,'manual');
+ assert.equal(fakeCalls[1].redirect,'manual');
  assert.equal(fakeCalls[0].body.model,'deepseek-v4.1-flash');
  assert.equal(fakeCalls[1].authorization,'Bearer onlyImage');
  assert.equal(fakeCalls[1].body.model,'gpt-image-2.5');
