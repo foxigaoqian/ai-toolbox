@@ -35,5 +35,8 @@
         "max_concurrency": 1
       }
     ]
+  },
+  "browser": {
+    "binding": "BROWSER"
   }
 }
