@@ -65,7 +65,11 @@ export async function generateText(env,system,user,options={}){
     headers:{authorization:'Bearer '+textKey(env),'content-type':'application/json'},
     body:JSON.stringify({model:textModel(env),messages:[{role:'system',content:system},{role:'user',content:user}],
        max_tokens,temperature,stream:false})});
-  }catch{throw Error('GATEWAY_NETWORK_FAILED');}
+   }catch(e){
+   const name=String(e?.name||'Error').replace(/[^a-zA-Z]/g,'').slice(0,28);
+   const cause=String(e?.message||'').replace(/sk-[a-zA-Z0-9_-]+/g,'[redacted]').slice(0,180);
+   throw Error('GATEWAY_NETWORK_FAILED:' + name + ':' + cause);
+  }
   if(!reply.ok)throw Error('GATEWAY_HTTP_'+reply.status);
   let payload;try{payload=await reply.json();}catch{throw Error('GATEWAY_BAD_JSON');}
   const output=payload?.choices?.[0]?.message?.content;
