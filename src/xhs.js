@@ -10,7 +10,10 @@ const reply=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:HEADERS}
 const normalize=(u)=>String(u||'').replace(/&amp;/gi,'&').replace(/\\u0026/gi,'&').replace(/\\u002F/gi,'/').replace(/\\\//g,'/');
 function validXhs(href){
  let u;try{u=new URL(href)}catch{return null}
- if(u.protocol!=='https:'||u.username||u.password||u.port||!XHS_HOSTS.has(u.hostname.toLowerCase()))return null;
+ if(u.username||u.password||u.port||!XHS_HOSTS.has(u.hostname.toLowerCase()))return null;
+ // Share text often contains http://xhslink.com; immediately upgrade to TLS.
+ if(u.protocol==='http:'&&['xhslink.com','www.xhslink.com'].includes(u.hostname.toLowerCase()))u.protocol='https:';
+ if(u.protocol!=='https:')return null;
  return u;
 }
 function validImage(href){
@@ -23,7 +26,7 @@ function validImage(href){
 function extractSharedUrl(input){
  const text=String(input||'').trim();
  const tokens=text.match(/https?:\/\/[^\s<>"'，。]+/g)||[];
- return tokens.map(t=>t.replace(/[)\]）】,;]+$/,'')).find(t=>validXhs(t))||null;
+ const found=tokens.map(t=>t.replace(/[)\]）】,;]+$/,'')).find(t=>validXhs(t));return found?validXhs(found).toString():null;
 }
 function entityDecode(s){return String(s||'').replace(/&(#x[0-9a-f]+|#\d+|amp|quot|apos|lt|gt|nbsp);/gi,(m,n)=>{
  const k=n.toLowerCase();if(k==='amp')return '&';if(k==='quot')return '"';if(k==='apos')return "'";if(k==='lt')return '<';if(k==='gt')return '>';if(k==='nbsp')return ' ';
