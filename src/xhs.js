@@ -3,6 +3,7 @@
  * No login, signatures, cookies, CAPTCHA bypass or platform-private endpoints.
  */
 import {parseXhsSsr,canonicalShareUrl,noteIdFromUrl} from './xhs-ssr.js';
+import {getSession,reserveQuota} from './generation.js';
 const LIMIT_HTML = 1200000;
 const XHS_HOSTS = new Set(['www.xiaohongshu.com','xiaohongshu.com','m.xiaohongshu.com','xhslink.com','www.xhslink.com','xhslink.cn','www.xhslink.cn']);
 const IMG_HOST_SUFFIX = ['.xhscdn.com','.xhscdn.net'];
@@ -158,6 +159,30 @@ async function extractPublicNote(href){
  throw error;
 }
 
+
+async function browserPreview(request,env,url){
+ if(!env.BROWSER||typeof env.BROWSER.quickAction!=='function')throw Error('BROWSER_NOT_CONFIGURED');
+ const owner=await getSession(request,env,true);
+ if(!await reserveQuota(env.DB,'global:xhs-browser',10))throw Error('BROWSER_PREVIEW_LIMIT');
+ if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,3))throw Error('BROWSER_SESSION_LIMIT');
+ const target=validXhs(url);if(!target||!noteIdFromUrl(target.toString()))throw Error('INVALID_XHS_URL');
+ const response=await env.BROWSER.quickAction('content',{
+   url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:900
+ });
+ if(!response.ok)throw Error('BROWSER_RENDER_FAILED');
+ const payload=await response.json();
+ const html=typeof payload?.result==='string'?payload.result:'';
+ if(!payload?.success||!html||html.length>1800000)throw Error('BROWSER_RENDER_FAILED');
+ let parsed;
+ try{parsed=parseXhsSsr(html,target.toString())}
+ catch{parsed=parseXhsHtml(html,target.toString())}
+ if(!parsed.description&&!parsed.images.length)throw Error('BROWSER_NOTE_EMPTY');
+ const result={ok:true,...parsed,mode:'browser-public-note',notice:'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
+ const headers={...HEADERS};
+ if(owner.cookie)headers['set-cookie']=owner.cookie;
+ return new Response(JSON.stringify(result),{status:200,headers});
+}
+
 async function resolve(req,env){
  if(!(req.headers.get('content-type')||'').includes('application/json'))return reply({error:'INVALID_CONTENT_TYPE'},415);
  let body;try{body=await req.json()}catch{return reply({error:'INVALID_JSON'},400)}
@@ -170,10 +195,15 @@ async function resolve(req,env){
  try{
   return reply(await extractPublicNote(url));
  }catch(e){
-  const reason=String(e?.message||e).slice(0,90);
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE']);
+  let reason=String(e?.message||e).slice(0,90);
+  const requested=validXhs(url);
+  if(requested&&noteIdFromUrl(requested.toString())&&env.BROWSER&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
+   try{return await browserPreview(req,env,url)}
+   catch(err){reason=String(err?.message||err).slice(0,90)}
+  }
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:'无法读取公开笔记。可能要求登录、链接失效或限制访问；请手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function imageProxy(req){
