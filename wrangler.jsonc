@@ -18,5 +18,22 @@
       "binding": "ASSETS",
       "bucket_name": "ai-toolbox-assets"
     }
-  ]
+  ],
+  "queues": {
+    "producers": [
+      {
+        "queue": "ai-toolbox-batch",
+        "binding": "BATCH_QUEUE"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ai-toolbox-batch",
+        "max_batch_size": 2,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "max_concurrency": 1
+      }
+    ]
+  }
 }
