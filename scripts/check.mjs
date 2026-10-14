@@ -206,6 +206,9 @@ try{
 const xhsSource=readFileSync('src/xhs.js','utf8');
 assert.ok(xhsSource.includes('CF_BROWSER_API_TOKEN'));
 assert.ok(xhsSource.includes('browserCooldown'));
+assert.ok(xhsSource.includes('XHS_BROWSER_SESSION_DAILY=20'));
+assert.ok(xhsSource.includes('XHS_BROWSER_GLOBAL_DAILY=60'));
+assert.ok(xhsSource.includes('operationalFailure'));
 
 
 

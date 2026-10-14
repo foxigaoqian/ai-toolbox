@@ -6,6 +6,8 @@ import {parseXhsSsr,canonicalShareUrl,noteIdFromUrl} from './xhs-ssr.js';
 import {parseWithEasyDown,parseWithXhsDownloader} from './xhs-external.js';
 import {getSession,reserveQuota} from './generation.js';
 const LIMIT_HTML = 1200000;
+const XHS_BROWSER_GLOBAL_DAILY=60;
+const XHS_BROWSER_SESSION_DAILY=20;
 const XHS_HOSTS = new Set(['www.xiaohongshu.com','xiaohongshu.com','m.xiaohongshu.com','xhslink.com','www.xhslink.com','xhslink.cn','www.xhslink.cn']);
 const IMG_HOST_SUFFIX = ['.xhscdn.com','.xhscdn.net','.rednotecdn.com','.rednotecdn.net'];
 const HEADERS = {'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'};
@@ -302,8 +304,8 @@ async function browserPreview(request,env,url,shareHint={}){
  const hasRest=!!(env.CF_BROWSER_API_TOKEN&&/^[0-9a-f]{32}$/i.test(String(env.CF_BROWSER_ACCOUNT_ID||'')));
  if(!hasBinding&&!hasRest)throw Error('BROWSER_NOT_CONFIGURED');
  const owner=await getSession(request,env,true);
- if(!await reserveQuota(env.DB,'global:xhs-browser',10))throw Error('BROWSER_PREVIEW_LIMIT');
- if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,3))throw Error('BROWSER_SESSION_LIMIT');
+ if(!await reserveQuota(env.DB,'global:xhs-browser',XHS_BROWSER_GLOBAL_DAILY))throw Error('BROWSER_PREVIEW_LIMIT');
+ if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,XHS_BROWSER_SESSION_DAILY))throw Error('BROWSER_SESSION_LIMIT');
  const target=validXhs(url);if(!target||!noteIdFromUrl(target.toString()))throw Error('INVALID_XHS_URL');
  const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'networkidle2',timeout:30000},waitForTimeout:1200};
  const cookies=parseXhsCookieSecret(env.XHS_COOKIE);
@@ -458,13 +460,14 @@ async function resolve(req,env){
     }
    }
   }
-  if(shareHint.title){
+  const operationalFailure=new Set(['BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_COOLDOWN','BROWSER_HTTP_429','BROWSER_HTTP_503','XHS_COOKIE_INVALID','XHS_COOKIE_SESSION_MISSING']).has(reason);
+  if(shareHint.title&&!operationalFailure){
    const fallback={ok:true,title:shareHint.title,description:'',images:[],author:shareHint.author,noteType:'normal',sourceUrl:url,partial:true,mode:'share-text-title-only',notice:'已从分享文字识别标题，但小红书未公开返回正文和图片；正文保持为空，避免把平台页面文案误当原帖。'};
    return reply(fallback);
   }
   const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_COOKIE_INVALID','XHS_COOKIE_SESSION_MISSING','XHS_PARSER_DAILY_LIMIT','XHS_PARSER_RATE_LIMIT','XHS_PARSER_AUTH','XHS_PARSER_EMPTY','XHS_PARSER_TIMEOUT','XHS_PARSER_NETWORK','XHS_PARSER_PAGE_SHELL','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_COOKIE_INVALID'?'服务端小红书 Cookie 格式无效，请管理员重新配置。':reason==='XHS_COOKIE_SESSION_MISSING'?'当前 Cookie 缺少 web_session，仍然不是有效登录态；请重新登录小红书后复制完整 Request Headers Cookie。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_SESSION_LIMIT'?'当前浏览器今天的小红书解析额度已用完，请明天再试或手动导入。':reason==='BROWSER_PREVIEW_LIMIT'?'今天全站的小红书解析额度已用完，请明天再试或手动导入。':reason==='XHS_COOKIE_INVALID'?'服务端小红书 Cookie 格式无效，请管理员重新配置。':reason==='XHS_COOKIE_SESSION_MISSING'?'当前 Cookie 缺少 web_session，仍然不是有效登录态；请重新登录小红书后复制完整 Request Headers Cookie。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},reason==='BROWSER_SESSION_LIMIT'||reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_HTTP_429'?429:422);
  }
 }
 async function cachedNoteImage(req,env,note,index){
