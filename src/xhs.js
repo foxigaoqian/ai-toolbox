@@ -26,6 +26,13 @@ function validImage(href){
  if(h==='ci.xiaohongshu.com'||h==='sns-avatar-qc.xhscdn.com'||IMG_HOST_SUFFIX.some(s=>h.endsWith(s))||['xhscdn.com','xhscdn.net','rednotecdn.com','rednotecdn.net'].includes(h))return u.toString();
  return null;
 }
+function noteImage(href){
+ const valid=validImage(href);if(!valid)return null;
+ const u=new URL(valid),host=u.hostname.toLowerCase(),path=u.pathname.toLowerCase();
+ // Avatars, emoji and site chrome live on the same CDN as note photos.
+ if(host.includes('avatar')||host.startsWith('fe-static.')||host.startsWith('picasso-static.')||/\.(?:svg|gif)$/i.test(path)||/(?:^|\/)(?:avatar|emoji|icon)(?:\/|$)/i.test(path))return null;
+ return valid;
+}
 export function extractSharedUrl(input){
  const text=String(input||'').trim();
  const tokens=text.match(/https?:\/\/[^\s<>"'，。]+/g)||[];
@@ -69,17 +76,6 @@ function maybeJsonData(raw){
  if(!raw)return null;
  try{return JSON.parse(raw)}catch{return null}
 }
-function collectJson(j,into,depth=0){
- if(depth>7||!j||into.size>=9)return;
- if(Array.isArray(j)){for(const k of j.slice(0,15))collectJson(k,into,depth+1);return}
- if(typeof j==='string'){const url=validImage(j);if(url)into.add(url);return}
- if(typeof j==='object'){
-  for(const [k,v]of Object.entries(j).slice(0,40)){
-    if(['image','images','thumbnailUrl','urlDefault','urlPre','imageList','cover','originUrl','url','src','imageUrl'].includes(k))collectJson(v,into,depth+1);
-    else if(['@graph','mainEntity','itemListElement','note','noteDetailMap'].includes(k))collectJson(v,into,depth+1);
-  }
- }
-}
 function jsonStringField(html,key){
  const re=new RegExp('["\\x27]'+key+'["\\x27]\\s*:\\s*("(?:\\\\.|[^"\\\\])*")');
  const m=re.exec(html);if(!m)return '';
@@ -105,6 +101,50 @@ export function jsonStringFieldNearTitle(html,key,title){
  }
  return best?.value||'';
 }
+function rawArray(text,start){
+ let depth=0,quote=false,escape=false;
+ if(text[start]!=='[')return '';
+ for(let i=start;i<text.length;i++){
+  const c=text[i];
+  if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c==='"')quote=false;continue}
+  if(c==='"'){quote=true;continue}
+  if(c==='[')depth++;
+  else if(c===']'){depth--;if(depth===0)return text.slice(start,i+1)}
+ }
+ return '';
+}
+function photoList(value){
+ const out=[],seen=new Set();
+ for(const item of Array.isArray(value)?value.slice(0,30):[]){
+  if(!item||typeof item!=='object')continue;
+  let source=item.urlDefault||item.urlPre||item.url||item.originUrl;
+  if(!source&&Array.isArray(item.infoList)){
+   const preferred=item.infoList.find(x=>x?.imageScene==='WB_DFT'&&x?.url);
+   source=preferred?.url||item.infoList.find(x=>x?.url)?.url;
+  }
+  const image=noteImage(source);if(!image)continue;
+  const key=new URL(image).pathname;if(seen.has(key))continue;
+  seen.add(key);out.push(image);if(out.length>=9)break;
+ }
+ return out;
+}
+/** Extract only the imageList closest to this exact note title. */
+export function jsonImageListNearTitle(html,title){
+ const wanted=titleKey(title);if(!wanted)return [];
+ const headings=jsonStringFields(html,'title').filter(x=>titleKey(x.value)===wanted);
+ const lists=[];
+ for(const match of html.matchAll(/["']imageList["']\s*:\s*\[/g))lists.push({index:match.index,start:match.index+match[0].lastIndexOf('[')});
+ let best=null;
+ for(const heading of headings){
+  for(const list of lists){
+   const distance=Math.abs(list.index-heading.index);if(distance>80000||best&&distance>=best.distance)continue;
+   const raw=rawArray(html,list.start);if(!raw||raw.length>500000)continue;
+   let parsed;try{parsed=JSON.parse(raw)}catch{continue}
+   const images=photoList(parsed);if(images.length)best={distance,images};
+  }
+ }
+ return best?.images||[];
+}
 function cleanScrapedText(value){
  return strip(value).replace(/\s*(?:展开|收起)\s*$/,'').trim();
 }
@@ -129,31 +169,39 @@ export function parseBrowserJsonNote(payload,url){
  const author=cleanScrapedText(raw.author||raw.nickname||'').slice(0,120);
  const candidates=Array.isArray(raw.images)?raw.images:Array.isArray(raw.image_urls)?raw.image_urls:[];
  const images=[];
- for(const item of candidates){const image=validImage(typeof item==='string'?item:item?.url||item?.src);if(image&&!images.includes(image))images.push(image);if(images.length>=9)break}
+ for(const item of candidates){const image=noteImage(typeof item==='string'?item:item?.url||item?.src);if(image&&!images.includes(image))images.push(image);if(images.length>=9)break}
  return {sourceUrl:url,title,description,author,images,noteType:'normal',mode:'browser-authenticated-json',partial:!description||!images.length};
 }
 export function parseXhsHtml(html,url=''){
  const path=validXhs(url)?.pathname||'';
  if(/^\/(?:login|signin|passport)(?:\/|$)/i.test(path))
   return {sourceUrl:url,title:'',description:'',images:[],mode:'login-required',partial:true};
- const meta=metaTags(html),imgs=new Set();
- let jsonTitle='',jsonBody='';
+ const meta=metaTags(html);
+ let jsonTitle='',jsonBody='',jsonNode=null;
  for(const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
   const j=maybeJsonData(m[1]);if(!j)continue;
-  collectJson(j,imgs);
   const n=Array.isArray(j)?j.find(x=>x?.headline||x?.articleBody):j;
-  if(n){jsonTitle=String(n.headline||n.name||'');jsonBody=String(n.articleBody||n.description||'')}
- }
- for(const key of ['og:image','twitter:image','image'])if(meta[key]){const u=validImage(meta[key]);if(u)imgs.add(u)}
- const candidates=[meta['og:image:secure_url'],...Array.from(html.matchAll(/"urlDefault"\s*:\s*"((?:\\.|[^"\\])+)"/g)).slice(0,12).map(x=>x[1]),...Array.from(html.matchAll(/"urlPre"\s*:\s*"((?:\\.|[^"\\])+)"/g)).slice(0,12).map(x=>x[1])];
- for(const item of candidates){const v=validImage(item);if(v)imgs.add(v)}
- for(const m of Array.from(html.matchAll(/<img\b[^>]*>/gi)).slice(0,30)){
-   const src=m[0].match(/\b(?:src|data-src)\s*=\s*["']([^"']+)/i);
-   if(src){const v=validImage(entityDecode(src[1]));if(v)imgs.add(v)}
+  if(n){jsonNode=n;jsonTitle=String(n.headline||n.name||'');jsonBody=String(n.articleBody||n.description||'')}
  }
  const title=strip(meta['og:title']||jsonTitle||meta['twitter:title']||jsonStringField(html,'title')||'').replace(/\s*[-|]\s*小红书.*$/,'').slice(0,160);
  const article=jsonStringFieldNearTitle(html,'desc',title)||jsonStringField(html,'desc');
  const description=strip(article||jsonBody||meta['og:description']||meta.description||'').slice(0,5500);
+ const imgs=new Set(jsonImageListNearTitle(html,title));
+ // If rendered HTML omits the note state, accept only non-decorative CDN media.
+ if(!imgs.size){
+  const ldImages=Array.isArray(jsonNode?.image)?jsonNode.image:[jsonNode?.image,jsonNode?.thumbnailUrl];
+  const candidates=[meta['og:image:secure_url'],meta['og:image'],meta['twitter:image'],meta.image,...ldImages,
+   ...Array.from(html.matchAll(/"urlDefault"\s*:\s*"((?:\\.|[^"\\])+)"/g)).slice(0,12).map(x=>x[1]),
+   ...Array.from(html.matchAll(/"urlPre"\s*:\s*"((?:\\.|[^"\\])+)"/g)).slice(0,12).map(x=>x[1])];
+  // Unscoped page-level fallbacks can also contain recommendation cards.
+  // Keep only the first real note-media candidate unless a scoped imageList
+  // was found above (which may legitimately contain multiple photos).
+  for(const item of candidates){const v=noteImage(item);if(v){imgs.add(v);break}}
+  if(!imgs.size)for(const m of Array.from(html.matchAll(/<img\b[^>]*>/gi)).slice(0,40)){
+   const src=m[0].match(/\b(?:src|data-src)\s*=\s*["']([^"']+)/i);
+   if(src){const v=noteImage(entityDecode(src[1]));if(v){imgs.add(v);break}}
+  }
+ }
  // Generic login shells contain no note content. Never invent source material.
  const generic=genericShell(title,description)||(description.length<50&&imgs.size===0&&(/^(小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)/i.test(title)||/^(小红书|REDnote|登录|发现)$/i.test(title)));
  return {sourceUrl:url,title:generic?'':title,description:generic?'':description,images:Array.from(imgs).slice(0,9),mode:generic?'generic-page-shell':'public-page-preview',partial:generic||imgs.size===0||!description};
@@ -257,7 +305,7 @@ async function browserPreview(request,env,url,shareHint={}){
  if(!await reserveQuota(env.DB,'global:xhs-browser',10))throw Error('BROWSER_PREVIEW_LIMIT');
  if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,3))throw Error('BROWSER_SESSION_LIMIT');
  const target=validXhs(url);if(!target||!noteIdFromUrl(target.toString()))throw Error('INVALID_XHS_URL');
- const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:1200};
+ const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'networkidle2',timeout:30000},waitForTimeout:1200};
  const cookies=parseXhsCookieSecret(env.XHS_COOKIE);
  if(env.XHS_COOKIE&&!cookies.length)throw Error('XHS_COOKIE_INVALID');
  const authenticated=hasXhsSessionCookie(cookies);
@@ -306,6 +354,10 @@ async function getCachedNote(env,noteId){
   if(!row)return null;
   const obj=JSON.parse(row.result_json);
   if(typeof obj.description!=='string'||!Array.isArray(obj.images))return null;
+  if(obj.imageScope!=='target-note-v3'){
+   await env.DB.prepare('DELETE FROM xhs_note_cache WHERE note_id=?').bind(noteId).run().catch(()=>{});
+   return null;
+  }
   if(genericShell(obj.title,obj.description)){
    await env.DB.prepare('DELETE FROM xhs_note_cache WHERE note_id=?').bind(noteId).run().catch(()=>{});
    return null;
@@ -323,7 +375,8 @@ async function saveCachedNote(env,noteId,result){
   noteType:String(result.noteType||'normal').slice(0,40),
   sourceUrl:'https://www.xiaohongshu.com/discovery/item/'+noteId,
   partial:!!result.partial,
-  mode:String(result.mode||'public-page-preview')
+  mode:String(result.mode||'public-page-preview'),
+  imageScope:'target-note-v3'
  };
  const now=seconds();
  // Xiaohongshu image URLs often contain short-lived signatures.
@@ -417,7 +470,9 @@ async function resolve(req,env){
 async function cachedNoteImage(req,env,note,index){
  if(!/^[a-f0-9]{24}$/.test(note)||!Number.isInteger(index)||index<0||index>8)return new Response('Invalid note image',{status:400});
  if(!env.DB||!env.ASSETS)return new Response('Storage not ready',{status:503});
- const key='xhs-preview/'+note+'/'+index;
+ // Version the binary cache independently from metadata so a previously
+ // misclassified avatar can never be served for a corrected note image slot.
+ const key='xhs-preview-v2/'+note+'/'+index;
  const existing=await env.ASSETS.get(key).catch(()=>null);
  if(existing){
   const mime=existing.httpMetadata?.contentType||'image/webp';

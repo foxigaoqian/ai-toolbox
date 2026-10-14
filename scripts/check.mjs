@@ -42,7 +42,7 @@ assert.ok(readFileSync('src/images.js','utf8').includes('真正的图生图语�
 
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
-const {parseXhsHtml,extractSharedUrl,extractShareEnvelope,parseXhsCookieSecret,hasXhsSessionCookie,parseScrapedNote,parseBrowserJsonNote,jsonStringFieldNearTitle}=await import('../src/xhs.js');
+const {parseXhsHtml,extractSharedUrl,extractShareEnvelope,parseXhsCookieSecret,hasXhsSessionCookie,parseScrapedNote,parseBrowserJsonNote,jsonStringFieldNearTitle,jsonImageListNearTitle}=await import('../src/xhs.js');
 assert.equal(extractSharedUrl('小红书公开笔记 http://xhslink.com/a/abc123 看看'),'https://xhslink.com/a/abc123');
 assert.deepEqual(extractShareEnvelope('35 【订婚后有必要住一起吗 - 圆圆 | 小红书 - 你的生活兴趣社区】 😆 https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686'),{title:'订婚后有必要住一起吗',author:'圆圆'});
 assert.equal(extractSharedUrl('https://localhost/admin'),null);
@@ -67,6 +67,15 @@ assert.equal(aiExtracted.description,'原文逐字内容');
 assert.equal(aiExtracted.images.length,1);
 const nestedHtml='<script>{"user":{"desc":"从0-1的自学之路"},"note":{"title":"订婚后有必要住一起吗？","desc":"想知道大家对婚前同居的建议","user":{"nickname":"圆圆"}}}</script>';
 assert.equal(jsonStringFieldNearTitle(nestedHtml,'desc','订婚后有必要住一起吗？'),'想知道大家对婚前同居的建议');
+const targetImage='https://sns-webpic-qc.xhscdn.com/20261014/hash/notes_pre_post/target.webp';
+const unrelatedImage='https://sns-webpic-qc.xhscdn.com/20261014/hash/notes_pre_post/recommend.webp';
+const scopedImages='<script>'+JSON.stringify({feed:{title:'推荐笔记',imageList:[{urlDefault:unrelatedImage}]},note:{
+ title:'订婚后有必要住一起吗？',desc:'想知道大家对婚前同居的建议',imageList:[
+  {urlDefault:targetImage},{urlDefault:'https://sns-avatar-qc.xhscdn.com/avatar/user.webp'}
+ ]}})+'</script><img src="https://fe-static.xhscdn.com/icon.svg"><img src="https://sns-avatar-qc.xhscdn.com/avatar/author.webp">';
+assert.deepEqual(jsonImageListNearTitle(scopedImages,'订婚后有必要住一起吗？'),[targetImage]);
+const scopedNote=parseXhsHtml('<meta property="og:title" content="订婚后有必要住一起吗？ - 小红书">'+scopedImages,'https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686');
+assert.deepEqual(scopedNote.images,[targetImage]);
 const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
   '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+
@@ -102,7 +111,7 @@ assert.throws(()=>parseXhsSsr('<title>想了解些什么？</title>',noteURL),/X
 const note=parseXhsHtml(fixture,'https://www.xiaohongshu.com/explore/123');
 assert.ok(note.title.includes('通勤整理技巧'));
 assert.ok(note.description.includes('每天15分钟整理桌面')||note.description.includes('整理桌面'));
-assert.ok(note.images.length>=2);
+assert.equal(note.images.length,1);
 const empty=parseXhsHtml('<html><head><title>Login</title></head></html>');
 assert.equal(empty.description,'');
 assert.equal(empty.images.length,0);
@@ -120,7 +129,7 @@ assert.equal(boilerplate.images.length,1);
 assert.equal(boilerplate.mode,'generic-page-shell');
 
 const {handleXhsApi}=await import('../src/xhs.js');
-const cachedRecord={title:'结婚只办答谢宴是动了谁的蛋糕？',description:'公开笔记内容',images:['https://sns-webpic-qc.xhscdn.com/a.webp'],mode:'browser-public-note'};
+const cachedRecord={title:'结婚只办答谢宴是动了谁的蛋糕？',description:'公开笔记内容',images:['https://sns-webpic-qc.xhscdn.com/a.webp'],mode:'browser-public-note',imageScope:'target-note-v3'};
 const mockDb={prepare(sql){return {bind(...params){return {
   async first(){if(sql.includes('FROM xhs_note_cache'))return {result_json:JSON.stringify(cachedRecord)};throw Error('Unexpected D1 query')},
   async run(){throw Error('Cached lookup must not consume quota')}
