@@ -42,7 +42,7 @@ assert.ok(readFileSync('src/images.js','utf8').includes('真正的图生图语�
 
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
-const {parseXhsHtml,extractSharedUrl,extractShareEnvelope,parseXhsCookieSecret}=await import('../src/xhs.js');
+const {parseXhsHtml,extractSharedUrl,extractShareEnvelope,parseXhsCookieSecret,hasXhsSessionCookie,parseScrapedNote,parseBrowserJsonNote,jsonStringFieldNearTitle}=await import('../src/xhs.js');
 assert.equal(extractSharedUrl('小红书公开笔记 http://xhslink.com/a/abc123 看看'),'https://xhslink.com/a/abc123');
 assert.deepEqual(extractShareEnvelope('35 【订婚后有必要住一起吗 - 圆圆 | 小红书 - 你的生活兴趣社区】 😆 https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686'),{title:'订婚后有必要住一起吗',author:'圆圆'});
 assert.equal(extractSharedUrl('https://localhost/admin'),null);
@@ -52,6 +52,21 @@ assert.deepEqual(parseXhsCookieSecret('a1=abc123; web_session=session=value').ma
 ]);
 assert.deepEqual(parseXhsCookieSecret(JSON.stringify([{name:'webId',value:'id123',domain:'.xiaohongshu.com'},{name:'bad',value:'x',domain:'.example.com'}])).map(x=>x.name),['webId']);
 assert.equal(parseXhsCookieSecret('broken-cookie').length,0);
+assert.equal(hasXhsSessionCookie('a1=abc123; web_session=session-value'),true);
+assert.equal(hasXhsSessionCookie('a1=abc123; webId=id123'),false);
+const scraped=parseScrapedNote({result:[
+ {selector:'#detail-title',results:[{text:'订婚后有必要住一起吗？'}]},
+ {selector:'#detail-desc',results:[{text:'短文案'},{text:'先把生活习惯、开支和边界谈清楚，再决定是否提前住在一起。 展开'}]},
+ {selector:'.username',results:[{text:'圆圆'}]}
+]},'https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686');
+assert.equal(scraped.title,'订婚后有必要住一起吗？');
+assert.equal(scraped.description,'先把生活习惯、开支和边界谈清楚，再决定是否提前住在一起。');
+assert.equal(scraped.author,'圆圆');
+const aiExtracted=parseBrowserJsonNote({result:{title:'订婚后有必要住一起吗？',description:'原文逐字内容',author:'圆圆',images:['https://sns-webpic-qc.xhscdn.com/post.webp']}},'https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686');
+assert.equal(aiExtracted.description,'原文逐字内容');
+assert.equal(aiExtracted.images.length,1);
+const nestedHtml='<script>{"user":{"desc":"从0-1的自学之路"},"note":{"title":"订婚后有必要住一起吗？","desc":"想知道大家对婚前同居的建议","user":{"nickname":"圆圆"}}}</script>';
+assert.equal(jsonStringFieldNearTitle(nestedHtml,'desc','订婚后有必要住一起吗？'),'想知道大家对婚前同居的建议');
 const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
   '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+
