@@ -31,10 +31,13 @@ new Script(XHS_CLIENT,{filename:'xhs-app.js'});
 assert.ok(XHS_CLIENT.includes('xhs-image-mode'));
 assert.ok(XHS_CLIENT.includes('xhs-style-lock'));
 assert.ok(XHS_CLIENT.includes("form.append('mode'"));
-assert.ok(XHS_CLIENT.includes('停止剩余图片请求'));
+assert.ok(XHS_CLIENT.includes('xhs_intent_rewrite'));
+assert.ok(XHS_CLIENT.includes('语义图生图'));
+assert.ok(XHS_CLIENT.includes('实际加载成功才计入成功数'));
 assert.ok(XHS_CLIENT.includes('remix-reference.jpg'));
 assert.ok(XHS_CLIENT.includes("canvas.toBlob(resolve,'image/jpeg'"));
 assert.ok(readFileSync('src/images.js','utf8').includes('IMAGE_UPSTREAM_UNAVAILABLE'));
+assert.ok(readFileSync('src/images.js','utf8').includes('真正的图生图语义重绘'));
 
 
 assert.ok(html.includes('/xhs-app.js'));
@@ -146,10 +149,14 @@ assert.equal(cfg.d1_databases[0].binding,'DB');
 assert.equal(cfg.r2_buckets[0].binding,'ASSETS');
 assert.equal(cfg.queues.producers[0].binding,'BATCH_QUEUE');
 assert.equal(cfg.browser.binding,'BROWSER');
-const {parseAiResponse}=await import('../src/generation.js');
+const {parseAiResponse,xhsRewriteRequest}=await import('../src/generation.js');
 const structured=parseAiResponse({title:'测试',body:'这是一段来自结构化响应的正文。',tags:['示例']},'提示词');
 assert.equal(structured.body,'这是一段来自结构化响应的正文。');
 assert.equal(parseAiResponse('{"title":"另一个","body":"来自 JSON 文本的完整正文内容","tags":[]}','原文').title,'另一个');
+const rewriteRequest=xhsRewriteRequest({source_title:'结婚只办答谢宴',source_body:'我们只办答谢宴，不接亲，也不设置传统流程。重点是和真正关心我们的人分享喜悦。',direction:'换成更自然的第一人称表达'});
+assert.ok(rewriteRequest.system.includes('保留原意、重新表达'));
+assert.ok(rewriteRequest.user.includes('不得跑题'));
+assert.ok(rewriteRequest.user.includes('结婚只办答谢宴'));
 const {chatEndpoint,imageEndpoint,imageEditEndpoint,remakeImage,providerStatus,generateText,generateImage,decodeGatewaySSE,decodeGatewayText}=await import('../src/provider.js');
 assert.equal(decodeGatewaySSE('data: {"choices":[{"delta":{"content":"你好"}}]}\\n\\ndata: {"choices":[{"delta":{"content":"，秋天"}}]}\\n\\ndata: [DONE]'.replaceAll('\\n','\n')),'你好，秋天');
 assert.equal(decodeGatewayText({choices:[{message:{content:'普通 JSON 文案'}}]}),'普通 JSON 文案');
@@ -194,4 +201,4 @@ try{
 }finally{globalThis.fetch=realFetch;}
 assert.equal(tools.filter(x=>x.id==='tool-18'&&x.mode==='image-generate').length,1);
 assert.equal(tools.filter(x=>x.mode==='multi-editor').length,2);
-console.log('PASS: background-only image remix, style lock, R2 editor photos, separate group-bound text/image keys, distinct model endpoints, Worker modules, client browser script, 46 tools, 6 real AI text entries, D1/R2/AI bindings');
+console.log('PASS: intent-preserving text remix, semantic image-to-image, verified result loading, R2 editor photos, separate text/image keys, Worker modules and bindings');
