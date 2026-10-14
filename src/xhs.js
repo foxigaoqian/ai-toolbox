@@ -192,12 +192,16 @@ async function browserPreview(request,env,url){
  const headers={...HEADERS};
  if(owner.cookie)headers['set-cookie']=owner.cookie;
  await saveCachedNote(env,noteIdFromUrl(target.toString()),result);
- return new Response(JSON.stringify(result),{status:200,headers});
+ return new Response(JSON.stringify(publicNoteView(result,noteIdFromUrl(target.toString()))),{status:200,headers});
 }
 
 
 /** Short-lived note caching reduces Browser Run load and upstream expiring-image failures. */
 const seconds=()=>Math.floor(Date.now()/1000);
+function publicNoteView(result,noteId){
+ if(!noteId||!result||!Array.isArray(result.images))return result;
+ return {...result,images:result.images.slice(0,9).map((_,index)=>'/api/xhs/image?note='+noteId+'&index='+index)};
+}
 async function getCachedNote(env,noteId){
  if(!noteId||!env.DB)return null;
  try{
@@ -205,7 +209,7 @@ async function getCachedNote(env,noteId){
   if(!row)return null;
   const obj=JSON.parse(row.result_json);
   if(typeof obj.description!=='string'||!Array.isArray(obj.images))return null;
-  return {...obj,ok:true,cached:true,mode:obj.mode||'cached-public-note'};
+  return publicNoteView({...obj,ok:true,cached:true,mode:obj.mode||'cached-public-note'},noteId);
  }catch{return null}
 }
 async function saveCachedNote(env,noteId,result){
@@ -223,7 +227,7 @@ async function saveCachedNote(env,noteId,result){
  const now=seconds();
  // Xiaohongshu image URLs often contain short-lived signatures.
  await env.DB.prepare('INSERT INTO xhs_note_cache(note_id,result_json,created_at,expires_at) VALUES(?,?,?,?) ON CONFLICT(note_id) DO UPDATE SET result_json=excluded.result_json,created_at=excluded.created_at,expires_at=excluded.expires_at')
-  .bind(noteId,JSON.stringify(clean),now,now+420).run().catch(()=>{});
+  .bind(noteId,JSON.stringify(clean),now,now+86400).run().catch(()=>{});
 }
 async function browserCooldown(env){
  try{
@@ -254,7 +258,7 @@ async function resolve(req,env){
  try{
   const result=await extractPublicNote(url);
   await saveCachedNote(env,cacheId,result);
-  return reply(result);
+  return reply(publicNoteView(result,cacheId));
  }catch(e){
   let reason=String(e?.message||e).slice(0,90);
   if(cacheId&&(env.BROWSER||(env.CF_BROWSER_API_TOKEN&&env.CF_BROWSER_ACCOUNT_ID))&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
@@ -273,8 +277,54 @@ async function resolve(req,env){
   return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
-async function imageProxy(req){
- const url=new URL(req.url).searchParams.get('url');
+async function cachedNoteImage(req,env,note,index){
+ if(!/^[a-f0-9]{24}$/.test(note)||!Number.isInteger(index)||index<0||index>8)return new Response('Invalid note image',{status:400});
+ if(!env.DB||!env.ASSETS)return new Response('Storage not ready',{status:503});
+ const key='xhs-preview/'+note+'/'+index;
+ const existing=await env.ASSETS.get(key).catch(()=>null);
+ if(existing){
+  const mime=existing.httpMetadata?.contentType||'image/webp';
+  return new Response(existing.body,{headers:{'content-type':mime,'cache-control':'public,max-age=3600','x-content-type-options':'nosniff','cross-origin-resource-policy':'same-origin'}});
+ }
+ const row=await env.DB.prepare('SELECT result_json FROM xhs_note_cache WHERE note_id=? AND expires_at>?').bind(note,seconds()).first();
+ if(!row)return new Response('Note preview expired, parse note again',{status:404});
+ let obj;try{obj=JSON.parse(row.result_json)}catch{return new Response('Invalid cached note',{status:502})}
+ const src=validImage(obj?.images?.[index]);
+ if(!src)return new Response('Missing note image',{status:404});
+ let response;
+ try{response=await fetch(src,{redirect:'manual',signal:AbortSignal.timeout(9000),headers:{accept:'image/avif,image/webp,image/jpeg,image/png'}})}
+ catch{return new Response('Source image unavailable',{status:502})}
+ if(!response.ok)return new Response('Source image expired, please refresh note',{status:404});
+ const mime=(response.headers.get('content-type')||'').toLowerCase().split(';')[0];
+ if(!['image/png','image/jpeg','image/webp','image/avif'].includes(mime))return new Response('Unsupported image format',{status:415});
+ const size=Number(response.headers.get('content-length')||0);
+ if(size>6*1024*1024)return new Response('Image too large',{status:413});
+ const chunks=[],reader=response.body?.getReader();if(!reader)return new Response('Missing image bytes',{status:404});
+ let total=0;
+ for(;;){
+  const r=await reader.read();if(r.done)break;
+  total+=r.value.length;if(total>6*1024*1024){await reader.cancel();return new Response('Image too large',{status:413})}
+  chunks.push(r.value);
+ }
+ if(total<40)return new Response('Empty image',{status:404});
+ const bytes=new Uint8Array(total);let off=0;for(const chunk of chunks){bytes.set(chunk,off);off+=chunk.length}
+ const header=new TextDecoder().decode(bytes.slice(0,12));
+ if(!(mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216||
+      mime==='image/png'&&bytes[0]===137&&bytes[1]===80||
+      mime==='image/webp'&&header.startsWith('RIFF')||
+      mime==='image/avif'&&header.includes('avif')))return new Response('Invalid image data',{status:415});
+ await env.ASSETS.put(key,bytes,{httpMetadata:{contentType:mime}}).catch(()=>{});
+ return new Response(bytes,{headers:{'content-type':mime,'cache-control':'public,max-age=3600','x-content-type-options':'nosniff','cross-origin-resource-policy':'same-origin'}});
+}
+
+async function imageProxy(req,env){
+ const query=new URL(req.url).searchParams;
+ const note=query.get('note');
+ if(note!==null){
+  const index=Number(query.get('index'));
+  return cachedNoteImage(req,env,note,index);
+ }
+ const url=query.get('url');
  const valid=validImage(url||'');
  if(!valid)return new Response('Invalid image host',{status:400});
  try{
@@ -300,6 +350,6 @@ async function imageProxy(req){
 export async function handleXhsApi(req,env){
  const p=new URL(req.url).pathname;
  if(p==='/api/xhs/resolve'&&req.method==='POST')return resolve(req,env);
- if(p==='/api/xhs/image'&&req.method==='GET')return imageProxy(req);
+ if(p==='/api/xhs/image'&&req.method==='GET')return imageProxy(req,env);
  return null;
 }
