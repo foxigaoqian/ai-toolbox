@@ -61,7 +61,7 @@ async function remix(req,env){
  let input;try{input=await req.formData()}catch{return sendJson({error:'IMAGE_EDIT_INVALID_FORM'},400)}
  const file=input.get('reference');
  const prompt=String(input.get('prompt')||'').trim(),size=String(input.get('size')||'1024x1536');
- const mode=input.get('mode')==='background'?'background':'full';
+ const mode=input.get('mode')==='poster'?'poster':'semantic';
  if(!file||typeof file.arrayBuffer!=='function'||!file.size||file.size>4194304)
   return sendJson({error:'IMAGE_REFERENCE_REQUIRED',message:'请上传小于4MB的参考图片'},422);
  if(!['image/png','image/jpeg','image/webp'].includes(file.type))
@@ -84,9 +84,10 @@ async function remix(req,env){
    await refundQuota(env.DB,'global:images');
    return sendJson({error:'IMAGE_BROWSER_DAILY_LIMIT',message:'每个浏览器每天最多生成6张图片（含普通生图）'},429,owner.cookie);
   }
-  const enhancedPrompt=mode==='background'
-    ? '你正在制作【纯视觉底图】，后续前端 Canvas 会单独绘制所有中文标题和正文。严格禁止任何文字、字母、数字、字幕、Logo、水印、标语或看似文字的字符；尤其要清除原图中已有的所有文字，不能保留原文。参考输入图片的配色、图形元素、留白和信息布局，生成一张全新的原创无字竖版底图。把画面下半部留成干净、低纹理、浅色的中文排版空白区，画面上部使用精致的主题插画或装饰，整体统一、耐看且方便后续叠字。不复制原图人物、标识。视觉要求：'+prompt
-    : '参考输入图片的版式、色彩和视觉层次，创作原创图文，避免复制水印与商标。文字部分需准确但可能需要编辑器纠错。用户要求：'+prompt;
+  const shared='这是一次真正的图生图语义重绘。输入图片是主要参考，不是普通生图的装饰素材。先在内部理解原图的传播意图、主体及其关系、信息优先级、情绪和读者第一眼应得到的结论。必须保留这些语义锚点；同时重新设计构图、镜头、媒介、色彩、图形和装饰语言，使结果明显是新的视觉表达，不能只换背景或滤镜。禁止复制水印、账号名、Logo、商标和像素级细节。不要在输出中解释分析过程。';
+  const enhancedPrompt=mode==='semantic'
+    ? shared+' 输出一张完整、有明确主体和叙事的竖版视觉作品，不是空白底图。优先用人物动作、物体关系、场景或视觉隐喻表达原意；保留一块自然融入构图的干净标题区，供后续浏览器精确添加中文。除非用户明确要求，不要生成密集文字、伪文字或大段正文。用户要求：'+prompt
+    : shared+' 输出一张可直接使用的完整竖版海报。只允许一个简短清晰的标题区域，不要生成密集正文或伪文字；文字若不能准确呈现，宁可保留整洁标题区。用户要求：'+prompt;
   const img=await remakeImage(env,file,enhancedPrompt,{size});
   if(img.kind==='url')return sendJson({ok:true,kind:'temporary-external-url',url:img.url,saved:false,mode,model:img.model,warning:'图片模型返回临时图片外链，建议下载后再导入编辑器'},200,owner.cookie);
   const bytes=decodeImage(img.data),format=sniff(bytes),id=crypto.randomUUID(),key=owner.id+'/'+id+'.'+format.ext;
@@ -100,15 +101,17 @@ async function remix(req,env){
   const detail=String(e?.message||e);
   const upstreamStatus=Number(detail.match(/^IMAGE_EDIT_HTTP_(\d{3})$/)?.[1]||0);
   const gatewayFail=[500,502,503,504].includes(upstreamStatus);
+  const transportFail=/IMAGE_EDIT_(?:TIMEOUT|NETWORK_FAILED)/.test(detail);
   const message=upstreamStatus===502?'图片中转站返回502。该请求未获得有效图像，可能是上游通道暂时故障或当前参考图处理失败；已停止建议的后续批量请求，请稍后只试1张。':
     gatewayFail?'中转站图片通道暂时不可用，请稍后仅尝试1张，或查中转站调用日志。':
+    transportFail?'图片模型连接超时或中断，本次没有生成完成，请稍后只重试1张。':
     upstreamStatus===429?'中转站图片模型限流，稍后再试。':
     upstreamStatus===401||upstreamStatus===403?'图片模型 Key 权限有误，请检查中转站分组和模型权限。':
     upstreamStatus===404?'图片模型或 /images/edits 接口不存在，请核对中转站支持情况。':
     '图片 AI 复刻失败，请检查模型权限和请求格式。';
-  return sendJson({error:gatewayFail?'IMAGE_UPSTREAM_UNAVAILABLE':'IMAGE_EDIT_FAILED',detail:detail.startsWith('IMAGE_')?detail:'IMAGE_SERVICE_UNAVAILABLE',
+  return sendJson({error:gatewayFail||transportFail?'IMAGE_UPSTREAM_UNAVAILABLE':'IMAGE_EDIT_FAILED',detail:detail.startsWith('IMAGE_')?detail:'IMAGE_SERVICE_UNAVAILABLE',
     message,retryable:false,upstreamStatus:upstreamStatus||undefined},
-    gatewayFail?502:upstreamStatus===429?429:503,owner?.cookie||'');
+    transportFail?504:gatewayFail?502:upstreamStatus===429?429:503,owner?.cookie||'');
  }
 }
 
