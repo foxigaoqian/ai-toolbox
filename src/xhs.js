@@ -161,14 +161,25 @@ async function extractPublicNote(href){
 
 
 async function browserPreview(request,env,url){
- if(!env.BROWSER||typeof env.BROWSER.quickAction!=='function')throw Error('BROWSER_NOT_CONFIGURED');
+ const hasBinding=!!(env.BROWSER&&typeof env.BROWSER.quickAction==='function');
+ const hasRest=!!(env.CF_BROWSER_API_TOKEN&&/^[0-9a-f]{32}$/i.test(String(env.CF_BROWSER_ACCOUNT_ID||'')));
+ if(!hasBinding&&!hasRest)throw Error('BROWSER_NOT_CONFIGURED');
  const owner=await getSession(request,env,true);
  if(!await reserveQuota(env.DB,'global:xhs-browser',10))throw Error('BROWSER_PREVIEW_LIMIT');
  if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,3))throw Error('BROWSER_SESSION_LIMIT');
  const target=validXhs(url);if(!target||!noteIdFromUrl(target.toString()))throw Error('INVALID_XHS_URL');
- const response=await env.BROWSER.quickAction('content',{
-   url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:900
- });
+ const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:900};
+ // REST is optional and uses a distinct Browser Run API token; not the Square API key.
+ // Cloudflare REST can have different rate limits from the Worker binding.
+ let response;
+ if(hasRest){
+  const endpoint='https://api.cloudflare.com/client/v4/accounts/'+env.CF_BROWSER_ACCOUNT_ID+'/browser-rendering/content';
+  response=await fetch(endpoint,{
+   method:'POST',redirect:'manual',signal:AbortSignal.timeout(26000),
+   headers:{'Authorization':'Bearer '+env.CF_BROWSER_API_TOKEN,'Content-Type':'application/json'},
+   body:JSON.stringify(requestPayload)
+  });
+ }else response=await env.BROWSER.quickAction('content',requestPayload);
  if(!response.ok)throw Error('BROWSER_HTTP_'+response.status);
  const payload=await response.json();
  const html=typeof payload?.result==='string'?payload.result:'';
@@ -246,7 +257,7 @@ async function resolve(req,env){
   return reply(result);
  }catch(e){
   let reason=String(e?.message||e).slice(0,90);
-  if(cacheId&&env.BROWSER&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
+  if(cacheId&&(env.BROWSER||(env.CF_BROWSER_API_TOKEN&&env.CF_BROWSER_ACCOUNT_ID))&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
    const cooldown=await browserCooldown(env);
    if(cooldown){reason='BROWSER_COOLDOWN';}
    else{
