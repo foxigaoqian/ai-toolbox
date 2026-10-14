@@ -3,10 +3,11 @@
  * No login, signatures, cookies, CAPTCHA bypass or platform-private endpoints.
  */
 import {parseXhsSsr,canonicalShareUrl,noteIdFromUrl} from './xhs-ssr.js';
+import {parseWithEasyDown} from './xhs-external.js';
 import {getSession,reserveQuota} from './generation.js';
 const LIMIT_HTML = 1200000;
 const XHS_HOSTS = new Set(['www.xiaohongshu.com','xiaohongshu.com','m.xiaohongshu.com','xhslink.com','www.xhslink.com','xhslink.cn','www.xhslink.cn']);
-const IMG_HOST_SUFFIX = ['.xhscdn.com','.xhscdn.net'];
+const IMG_HOST_SUFFIX = ['.xhscdn.com','.xhscdn.net','.rednotecdn.com','.rednotecdn.net'];
 const HEADERS = {'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'};
 const reply=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:HEADERS});
 const normalize=(u)=>String(u||'').replace(/&amp;/gi,'&').replace(/\\u0026/gi,'&').replace(/\\u002F/gi,'/').replace(/\\\//g,'/');
@@ -22,7 +23,7 @@ function validImage(href){
  let u;try{u=new URL(normalize(href))}catch{return null}
  if(u.protocol!=='https:'||u.username||u.password||u.port)return null;
  const h=u.hostname.toLowerCase();
- if(h==='ci.xiaohongshu.com'||h==='sns-avatar-qc.xhscdn.com'||IMG_HOST_SUFFIX.some(s=>h.endsWith(s))||h==='xhscdn.com'||h==='xhscdn.net')return u.toString();
+ if(h==='ci.xiaohongshu.com'||h==='sns-avatar-qc.xhscdn.com'||IMG_HOST_SUFFIX.some(s=>h.endsWith(s))||['xhscdn.com','xhscdn.net','rednotecdn.com','rednotecdn.net'].includes(h))return u.toString();
  return null;
 }
 export function extractSharedUrl(input){
@@ -261,7 +262,24 @@ async function resolve(req,env){
   return reply(publicNoteView(result,cacheId));
  }catch(e){
   let reason=String(e?.message||e).slice(0,90);
-  if(cacheId&&(env.BROWSER||(env.CF_BROWSER_API_TOKEN&&env.CF_BROWSER_ACCOUNT_ID))&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
+  // Paid fallback is disabled by default. Only a server-side EasyDown Secret opts in.
+  // Keep strict global and per-browser caps to avoid leaking paid credits.
+  if(cacheId&&env.EASYDOWN_API_KEY){
+   let owner=null;
+   try{
+    owner=await getSession(req,env,true);
+    const globalAllowed=await reserveQuota(env.DB,'global:xhs-external',10);
+    const userAllowed=globalAllowed&&await reserveQuota(env.DB,'session:xhs-external:'+owner.id,2);
+    if(!globalAllowed||!userAllowed)throw Error('XHS_EXTERNAL_DAILY_LIMIT');
+    const apiResult=await parseWithEasyDown(env,url);
+    await saveCachedNote(env,cacheId,apiResult);
+    const headers={...HEADERS};if(owner.cookie)headers['set-cookie']=owner.cookie;
+    return new Response(JSON.stringify({...publicNoteView(apiResult,cacheId),ok:true,externalPaid:true}),{status:200,headers});
+   }catch(err){
+    reason=String(err?.message||err).slice(0,90);
+   }
+  }
+  if(env.XHS_BROWSER_FALLBACK!=='disabled'&&cacheId&&(env.BROWSER||(env.CF_BROWSER_API_TOKEN&&env.CF_BROWSER_ACCOUNT_ID))&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
    const cooldown=await browserCooldown(env);
    if(cooldown){reason='BROWSER_COOLDOWN';}
    else{
@@ -272,9 +290,9 @@ async function resolve(req,env){
     }
    }
   }
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN']);
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function cachedNoteImage(req,env,note,index){
