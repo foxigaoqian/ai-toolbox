@@ -89,6 +89,23 @@ assert.equal(misleading.images.length,0);
 const shell=parseXhsHtml(loginHtml,'https://www.xiaohongshu.com/discovery/item/123');
 assert.equal(shell.title,'');
 
+const {handleXhsApi}=await import('../src/xhs.js');
+const cachedRecord={title:'结婚只办答谢宴是动了谁的蛋糕？',description:'公开笔记内容',images:['https://sns-webpic-qc.xhscdn.com/a.webp'],mode:'browser-public-note'};
+const mockDb={prepare(sql){return {bind(...params){return {
+  async first(){if(sql.includes('FROM xhs_note_cache'))return {result_json:JSON.stringify(cachedRecord)};throw Error('Unexpected D1 query')},
+  async run(){throw Error('Cached lookup must not consume quota')}
+}}}}};
+const cachedResponse=await handleXhsApi(new Request('https://demo.invalid/api/xhs/resolve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:'https://www.xiaohongshu.com/discovery/item/6acb73cb000000001a03163f?xsec_token=sample'})}),{DB:mockDb});
+const cachePayload=await cachedResponse.json();
+assert.equal(cachedResponse.status,200);
+assert.equal(cachePayload.cached,true);
+assert.equal(cachePayload.images.length,1);
+assert.equal(cachePayload.title,cachedRecord.title);
+const xhsSource=readFileSync('src/xhs.js','utf8');
+assert.ok(xhsSource.includes('CF_BROWSER_API_TOKEN'));
+assert.ok(xhsSource.includes('browserCooldown'));
+
+
 
 const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
 assert.equal(cfg.ai.binding,'AI');
