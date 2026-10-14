@@ -42,10 +42,16 @@ assert.ok(readFileSync('src/images.js','utf8').includes('真正的图生图语�
 
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
-const {parseXhsHtml,extractSharedUrl,extractShareEnvelope}=await import('../src/xhs.js');
+const {parseXhsHtml,extractSharedUrl,extractShareEnvelope,parseXhsCookieSecret}=await import('../src/xhs.js');
 assert.equal(extractSharedUrl('小红书公开笔记 http://xhslink.com/a/abc123 看看'),'https://xhslink.com/a/abc123');
 assert.deepEqual(extractShareEnvelope('35 【订婚后有必要住一起吗 - 圆圆 | 小红书 - 你的生活兴趣社区】 😆 https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686'),{title:'订婚后有必要住一起吗',author:'圆圆'});
 assert.equal(extractSharedUrl('https://localhost/admin'),null);
+assert.deepEqual(parseXhsCookieSecret('a1=abc123; web_session=session=value').map(x=>({name:x.name,value:x.value,domain:x.domain})),[
+ {name:'a1',value:'abc123',domain:'.xiaohongshu.com'},
+ {name:'web_session',value:'session=value',domain:'.xiaohongshu.com'}
+]);
+assert.deepEqual(parseXhsCookieSecret(JSON.stringify([{name:'webId',value:'id123',domain:'.xiaohongshu.com'},{name:'bad',value:'x',domain:'.example.com'}])).map(x=>x.name),['webId']);
+assert.equal(parseXhsCookieSecret('broken-cookie').length,0);
 const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
   '<meta property="og:image" content="https://sns-webpic-qc.xhscdn.com/image-test.webp">'+

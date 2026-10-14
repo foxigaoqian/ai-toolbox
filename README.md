@@ -59,11 +59,21 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 4. 如果仍被拦截，调用已绑定的 Cloudflare Browser Run \`BROWSER.quickAction('content', ...)\`，从匿名浏览器公开页面解析 SSR/元数据。**不需要额外 API Token**，但消耗 Cloudflare Browser Run 浏览器时长与速率配额。
 5. 浏览器备用限流：全站 10 次/天、同一匿名浏览器 3 次/天。429 时明确提示 Cloudflare 额度/限流，绝不误认登录页标题为帖子标题。
 
+### 无服务器方案：Browser Run 登录态
+
+Cloudflare Browser Run 的 `content` 接口支持 `cookies` 参数。将自己的小红书登录 Cookie 保存为 Worker Secret `XHS_COOKIE` 后，现有 `BROWSER` 绑定会在服务端浏览器渲染时注入登录态；Cookie 不会下发给网页访客，也不会写入日志或数据库。支持直接粘贴浏览器 Cookie Header（`a1=...; web_session=...`）或导出的 Cookie JSON 数组。
+
+```bash
+npx wrangler secret put XHS_COOKIE
+```
+
+不要把 Cookie 写进代码、GitHub、聊天记录或普通 Text 变量。Cookie 失效后需在 Cloudflare Secret 中重新填写；建议使用专门的小红书账号，并保留现有全站 10 次/天、单浏览器 3 次/天限流。该方案不需要 Docker 或 Cloudflare Containers。
+
 ### 私有 XHS-Downloader 回退
 
 已加入 [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) API 模式适配，读取其 `作品标题`、`作品描述`、`作者昵称` 和 `下载地址` 字段。该回退只有同时配置 `XHS_PARSER_URL`（公网 HTTPS 地址）和 `XHS_PARSER_TOKEN`（Cloudflare Secret）才启用；请求带 Bearer 鉴权，超时 35 秒，响应限制 1.2MB，全站每日 30 次、同一匿名浏览器每日 5 次。
 
-部署文件和完整说明见 [deploy/xhs-parser/README.md](deploy/xhs-parser/README.md)。其中的网关会拒绝任意外站 URL，并强制关闭文件下载，避免把 Cookie、代理和下载能力暴露给前端。解析优先级为：公开 SSR/元数据 → 私有 XHS-Downloader → 可选 EasyDown → Browser Run → 分享文字标题兜底。
+部署文件和完整说明见 [deploy/xhs-parser/README.md](deploy/xhs-parser/README.md)。其中的网关会拒绝任意外站 URL，并强制关闭文件下载，避免把 Cookie、代理和下载能力暴露给前端。解析优先级为：公开 SSR/元数据 → 私有 XHS-Downloader → 可选 EasyDown → Browser Run（可注入 `XHS_COOKIE`）→ 分享文字标题兜底。
 
 **重要**：自动解析不是 100% 保证；Cloudflare Worker 的普通 HTTP 请求仍可能被小红书重定向到 \`/login\`。浏览器渲染在当前账号的连续测试中遇到过 **HTTP 429**，所以真实笔记全图/全文抓取仍需在 Browser Run 速率恢复后复验。不得宣称这两条真实用户链接已成功获取。未获取到原帖素材时仍有手动导入兜底，保留内容授权提醒。
 
