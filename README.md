@@ -31,17 +31,17 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
 [详细填写教程](docs/GATEWAY_SETUP.md)。
 
-## V0.8 小红书公开笔记复刻
+## V0.9 小红书公开笔记复刻
 
 进入首页 **AI 图文 → AI复刻同款图文**（`?tool=tool-02`）：
 
 1. 粘贴小红书公开长链接、`xhslink.com/a/...`、`xhslink.com/m/...` 或含链接的分享文字，点「解析公开笔记」。
-2. Worker 仅抓取无需登录的公开网页，尝试识别笔记标题、正文和最多 9 张可直接访问的参考图片，显示预览及可勾选的图片列表。
+2. Worker 先抓取无需登录的公开网页；若已配置私有解析服务，则回退自建 XHS-Downloader，尝试识别笔记标题、正文和最多 9 张参考图片。
 3. 若小红书返回登录页、验证码、拦截或动态加载壳，会明确失败；用户可以自行复制参考文案并上传图片（最多 9 张）。
 4. 点击「AI 原创复刻文案」通过现有文字模型重新创作，编辑并保存到 D1。点击「用图片和文案制作套图」转入多页编辑器，已加载的参考图片与新文案会共同布局；支持 PNG/ZIP 下载。
 5. 手动导入也能直接进行图文设计，无需依赖自动解析成功。
 
-**限制：** 自动抓取是 best-effort，无法保证所有小红书链接能自动取得完整图片和文案。不调用非公开笔记 API，不绕过登录、签名验证或验证码。链接预览默认每日全站最多 80 次；公开图片代理只放行固定小红书 CDN 域名并限制文件大小。AI 文案使用现有全站模型调用额度。
+**限制：** 自动抓取是 best-effort，无法保证所有小红书链接能自动取得完整图片和文案。不绕过验证码；登录受限时只使用管理员自行配置、且有权使用的服务端 Cookie。链接预览默认每日全站最多 80 次；公开图片代理只放行固定小红书 CDN 域名并限制文件大小。AI 文案使用现有全站模型调用额度。
 
 **版权提醒：** 原帖图片和文字属于其相应权利人；应使用自己有权使用的素材，改写后的文案不得假冒原作者。网站不会保证“原图无损下载”或批量复制整篇作品。
 
@@ -58,6 +58,12 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 3. HTTP 请求如果被转登录页，再尝试同一个笔记官方 URL 的 \`/explore/\`、\`/discovery/item/\` 两种路径。
 4. 如果仍被拦截，调用已绑定的 Cloudflare Browser Run \`BROWSER.quickAction('content', ...)\`，从匿名浏览器公开页面解析 SSR/元数据。**不需要额外 API Token**，但消耗 Cloudflare Browser Run 浏览器时长与速率配额。
 5. 浏览器备用限流：全站 10 次/天、同一匿名浏览器 3 次/天。429 时明确提示 Cloudflare 额度/限流，绝不误认登录页标题为帖子标题。
+
+### 私有 XHS-Downloader 回退
+
+已加入 [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) API 模式适配，读取其 `作品标题`、`作品描述`、`作者昵称` 和 `下载地址` 字段。该回退只有同时配置 `XHS_PARSER_URL`（公网 HTTPS 地址）和 `XHS_PARSER_TOKEN`（Cloudflare Secret）才启用；请求带 Bearer 鉴权，超时 35 秒，响应限制 1.2MB，全站每日 30 次、同一匿名浏览器每日 5 次。
+
+部署文件和完整说明见 [deploy/xhs-parser/README.md](deploy/xhs-parser/README.md)。其中的网关会拒绝任意外站 URL，并强制关闭文件下载，避免把 Cookie、代理和下载能力暴露给前端。解析优先级为：公开 SSR/元数据 → 私有 XHS-Downloader → 可选 EasyDown → Browser Run → 分享文字标题兜底。
 
 **重要**：自动解析不是 100% 保证；Cloudflare Worker 的普通 HTTP 请求仍可能被小红书重定向到 \`/login\`。浏览器渲染在当前账号的连续测试中遇到过 **HTTP 429**，所以真实笔记全图/全文抓取仍需在 Browser Run 速率恢复后复验。不得宣称这两条真实用户链接已成功获取。未获取到原帖素材时仍有手动导入兜底，保留内容授权提醒。
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {Script} from 'node:vm';
-for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js','src/xhs-ssr.js','src/xhs-external.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
+for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js','src/xhs-ssr.js','src/xhs-external.js','deploy/xhs-parser/gateway/gateway.mjs'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
 const source=readFileSync('src/index.js','utf8');
 const a=source.indexOf('const TOOLS=')+'const TOOLS='.length;
 const b=source.indexOf(';\nconst HTML=',a);
@@ -115,7 +115,23 @@ assert.equal(cachedImageResponse.status,200);
 assert.equal(cachedImageResponse.headers.get('content-type'),'image/webp');
 assert.equal(cachePayload.title,cachedRecord.title);
 
-const {normalizeEasyDownNote,safeMediaUrl,parseWithEasyDown}=await import('../src/xhs-external.js');
+const {normalizeEasyDownNote,safeMediaUrl,parseWithEasyDown,normalizeXhsDownloaderNote,parseWithXhsDownloader}=await import('../src/xhs-external.js');
+const selfHostedSample={
+ message:'获取小红书作品数据成功',
+ params:{url:noteURL,download:false,check_record:false},
+ data:{
+  '作品ID':noteId,'作品标题':'订婚后有必要住一起吗','作品描述':'先明确生活习惯和边界，再决定是否提前共同居住。',
+  '作品类型':'图文','作者昵称':'圆圆',
+  '下载地址':['https://sns-img-bd.xhscdn.com/notes/first.webp','http://ci.xiaohongshu.com/notes/second?imageView2/format/webp']
+ }
+};
+const selfHosted=normalizeXhsDownloaderNote(selfHostedSample,noteURL);
+assert.equal(selfHosted.title,'订婚后有必要住一起吗');
+assert.equal(selfHosted.description,'先明确生活习惯和边界，再决定是否提前共同居住。');
+assert.equal(selfHosted.author,'圆圆');
+assert.equal(selfHosted.images.length,2);
+assert.equal(selfHosted.mode,'self-hosted-xhs-downloader');
+assert.throws(()=>normalizeXhsDownloaderNote({message:'失败',data:null},noteURL),/XHS_PARSER_EMPTY/);
 const providerSample={
  status:200,
  data:{media:{title:'示例图文',images:[{url:'https://sns-i11.rednotecdn.com/photo.webp'}]},
@@ -141,6 +157,20 @@ try{
  const parsed=await parseWithEasyDown({EASYDOWN_API_KEY:'testEasyDown'},'https://www.xiaohongshu.com/discovery/item/6acb73cb000000001a03163f');
  assert.equal(upstreamRequests,1);
  assert.equal(parsed.images.length,1);
+
+ globalThis.fetch=async(url,options)=>{
+  assert.equal(url,'https://parser.example.com/service/xhs/detail');
+  assert.equal(options.headers.authorization,'Bearer '+('a'.repeat(64)));
+  const body=JSON.parse(options.body);
+  assert.equal(body.url,noteURL);
+  assert.equal(body.download,false);
+  assert.equal(body.check_record,false);
+  return new Response(JSON.stringify(selfHostedSample),{status:200,headers:{'content-type':'application/json'}});
+ };
+ const parsedSelfHosted=await parseWithXhsDownloader({XHS_PARSER_URL:'https://parser.example.com/service',XHS_PARSER_TOKEN:'a'.repeat(64)},noteURL);
+ assert.equal(parsedSelfHosted.title,'订婚后有必要住一起吗');
+ assert.equal(parsedSelfHosted.images.length,2);
+ await assert.rejects(()=>parseWithXhsDownloader({XHS_PARSER_URL:'http://127.0.0.1:5556',XHS_PARSER_TOKEN:'a'.repeat(64)},noteURL),/XHS_PARSER_INVALID_URL/);
 }finally{globalThis.fetch=previousFetch;}
 
 const xhsSource=readFileSync('src/xhs.js','utf8');
