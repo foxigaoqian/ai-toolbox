@@ -61,7 +61,7 @@ https://ai-toolbox.foxigaoqian-soocly.workers.dev/
 
 ### 无服务器方案：Browser Run 登录态
 
-Cloudflare Browser Run 的 `content` 接口支持 `cookies` 参数。将自己的小红书登录 Cookie 保存为 Worker Secret `XHS_COOKIE` 后，现有 `BROWSER` 绑定会在服务端浏览器渲染时注入登录态；Cookie 不会下发给网页访客，也不会写入日志或数据库。支持直接粘贴浏览器 Cookie Header（`a1=...; web_session=...`）或导出的 Cookie JSON 数组。
+Cloudflare Browser Run 的 `content` 接口支持 `cookies` 参数。将自己的小红书登录 Cookie 保存为 Worker Secret `XHS_COOKIE` 后，现有 `BROWSER` 绑定会在服务端浏览器渲染时注入登录态；Cookie 不会下发给网页访客，也不会写入日志或数据库。支持直接粘贴浏览器 Cookie Header（`a1=...; web_session=...`）或导出的 Cookie JSON 数组。必须包含有效的 `web_session`；配置接口只返回是否存在有效会话，不会返回 Cookie 内容。
 
 ```bash
 npx wrangler secret put XHS_COOKIE

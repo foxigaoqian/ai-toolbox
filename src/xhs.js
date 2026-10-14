@@ -85,6 +85,53 @@ function jsonStringField(html,key){
  const m=re.exec(html);if(!m)return '';
  try{return JSON.parse(m[1]).slice(0,6500)}catch{return ''}
 }
+function jsonStringFields(html,key){
+ const re=new RegExp('["\\x27]'+key+'["\\x27]\\s*:\\s*("(?:\\\\.|[^"\\\\])*")','g');
+ const out=[];let match;
+ while((match=re.exec(html))&&out.length<300){try{out.push({value:JSON.parse(match[1]).slice(0,6500),index:match.index})}catch{}}
+ return out;
+}
+const titleKey=value=>strip(value).replace(/[\s？?！!，,。.【】\[\]()（）《》]/g,'').toLowerCase();
+export function jsonStringFieldNearTitle(html,key,title){
+ const wanted=titleKey(title);if(!wanted)return '';
+ const titles=jsonStringFields(html,'title').filter(x=>titleKey(x.value)===wanted);
+ const values=jsonStringFields(html,key);let best=null;
+ for(const heading of titles){
+  for(const item of values){
+   const distance=item.index-heading.index;
+   if(distance<=0||distance>12000)continue;
+   if(!best||distance<best.distance)best={distance,value:item.value};
+  }
+ }
+ return best?.value||'';
+}
+function cleanScrapedText(value){
+ return strip(value).replace(/\s*(?:展开|收起)\s*$/,'').trim();
+}
+function scrapedEntry(payload,index){
+ const group=Array.isArray(payload?.result)?payload.result[index]:null;
+ return Array.isArray(group?.results)?group.results:[];
+}
+export function parseScrapedNote(payload,url){
+ const title=scrapedEntry(payload,0).map(x=>cleanScrapedText(x?.text)).find(Boolean)||'';
+ const bodies=scrapedEntry(payload,1).map(x=>cleanScrapedText(x?.text)).filter(Boolean);
+ // Some responsive layouts render the same note twice. Prefer the richest copy,
+ // rather than the first generic/profile description found in serialized HTML.
+ const description=bodies.sort((a,b)=>b.length-a.length)[0]||'';
+ const author=scrapedEntry(payload,2).map(x=>cleanScrapedText(x?.text)).find(Boolean)||'';
+ return {sourceUrl:url,title:title.slice(0,180),description:description.slice(0,5500),author:author.slice(0,120)};
+}
+export function parseBrowserJsonNote(payload,url){
+ const raw=payload?.result?.note&&typeof payload.result.note==='object'?payload.result.note:payload?.result;
+ if(!raw||typeof raw!=='object')return {sourceUrl:url,title:'',description:'',author:'',images:[]};
+ const title=cleanScrapedText(raw.title||'').slice(0,180);
+ const description=cleanScrapedText(raw.description||raw.body||raw.caption||'').slice(0,5500);
+ const author=cleanScrapedText(raw.author||raw.nickname||'').slice(0,120);
+ const candidates=Array.isArray(raw.images)?raw.images:Array.isArray(raw.image_urls)?raw.image_urls:[];
+ const images=[];
+ for(const item of candidates){const image=validImage(typeof item==='string'?item:item?.url||item?.src);if(image&&!images.includes(image))images.push(image);if(images.length>=9)break}
+ return {sourceUrl:url,title,description,author,images,noteType:'normal',mode:'browser-authenticated-json',partial:!description||!images.length};
+}
 export function parseXhsHtml(html,url=''){
  const path=validXhs(url)?.pathname||'';
  if(/^\/(?:login|signin|passport)(?:\/|$)/i.test(path))
@@ -105,7 +152,7 @@ export function parseXhsHtml(html,url=''){
    if(src){const v=validImage(entityDecode(src[1]));if(v)imgs.add(v)}
  }
  const title=strip(meta['og:title']||jsonTitle||meta['twitter:title']||jsonStringField(html,'title')||'').replace(/\s*[-|]\s*小红书.*$/,'').slice(0,160);
- const article=jsonStringField(html,'desc');
+ const article=jsonStringFieldNearTitle(html,'desc',title)||jsonStringField(html,'desc');
  const description=strip(article||jsonBody||meta['og:description']||meta.description||'').slice(0,5500);
  // Generic login shells contain no note content. Never invent source material.
  const generic=genericShell(title,description)||(description.length<50&&imgs.size===0&&(/^(小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)/i.test(title)||/^(小红书|REDnote|登录|发现)$/i.test(title)));
@@ -145,6 +192,10 @@ export function parseXhsCookieSecret(raw){
   seen.add(name);out.push({name,value,domain:domain==='xiaohongshu.com'?'.xiaohongshu.com':domain,path:'/',secure:true});
  }
  return out;
+}
+export function hasXhsSessionCookie(raw){
+ const cookies=Array.isArray(raw)?raw:parseXhsCookieSecret(raw);
+ return cookies.some(cookie=>cookie.name==='web_session'&&String(cookie.value||'').length>=8);
 }
 async function fetchPage(href){
  let url=validXhs(href);if(!url)throw Error('INVALID_XHS_URL');
@@ -198,7 +249,7 @@ async function extractPublicNote(href){
 }
 
 
-async function browserPreview(request,env,url){
+async function browserPreview(request,env,url,shareHint={}){
  const hasBinding=!!(env.BROWSER&&typeof env.BROWSER.quickAction==='function');
  const hasRest=!!(env.CF_BROWSER_API_TOKEN&&/^[0-9a-f]{32}$/i.test(String(env.CF_BROWSER_ACCOUNT_ID||'')));
  if(!hasBinding&&!hasRest)throw Error('BROWSER_NOT_CONFIGURED');
@@ -209,10 +260,12 @@ async function browserPreview(request,env,url){
  const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:1200};
  const cookies=parseXhsCookieSecret(env.XHS_COOKIE);
  if(env.XHS_COOKIE&&!cookies.length)throw Error('XHS_COOKIE_INVALID');
+ const authenticated=hasXhsSessionCookie(cookies);
+ if(env.XHS_COOKIE&&!authenticated)throw Error('XHS_COOKIE_SESSION_MISSING');
  if(cookies.length)requestPayload.cookies=cookies;
  // REST is optional and uses a distinct Browser Run API token; not the Square API key.
  // Cloudflare REST can have different rate limits from the Worker binding.
- let response;
+ let response,parsed;
  if(hasRest){
   const endpoint='https://api.cloudflare.com/client/v4/accounts/'+env.CF_BROWSER_ACCOUNT_ID+'/browser-rendering/content';
   response=await fetch(endpoint,{
@@ -221,15 +274,18 @@ async function browserPreview(request,env,url){
    body:JSON.stringify(requestPayload)
   });
  }else response=await env.BROWSER.quickAction('content',requestPayload);
- if(!response.ok)throw Error('BROWSER_HTTP_'+response.status);
- const payload=await response.json();
- const html=typeof payload?.result==='string'?payload.result:'';
- if(!payload?.success||!html||html.length>1800000)throw Error('BROWSER_RESULT_INVALID_'+(payload?.success===false?'FAILURE':typeof payload?.result));
- let parsed;
- try{parsed=parseXhsSsr(html,target.toString())}
- catch{parsed=parseXhsHtml(html,target.toString())}
+ if(!parsed){
+  if(!response.ok)throw Error('BROWSER_HTTP_'+response.status);
+  const payload=await response.json();
+  const html=typeof payload?.result==='string'?payload.result:'';
+  if(!payload?.success||!html||html.length>1800000)throw Error('BROWSER_RESULT_INVALID_'+(payload?.success===false?'FAILURE':typeof payload?.result));
+  try{parsed=parseXhsSsr(html,target.toString())}
+  catch{parsed=parseXhsHtml(html,target.toString())}
+ }
  if(parsed.mode==='generic-page-shell'||genericShell(parsed.title,parsed.description)||!parsed.description&&!parsed.images.length)throw Error('BROWSER_NOTE_EMPTY');
- const result={ok:true,...parsed,mode:cookies.length?'browser-authenticated-note':'browser-public-note',notice:cookies.length?'已使用管理员配置的服务端登录态读取公开笔记；Cookie 不会返回浏览器端。':'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
+ if(!parsed.title&&shareHint.title)parsed.title=shareHint.title;
+ if(!parsed.author&&shareHint.author)parsed.author=shareHint.author;
+ const result={ok:true,...parsed,mode:authenticated?'browser-authenticated-note':'browser-public-note',notice:authenticated?'已使用管理员配置的服务端登录态读取公开笔记；Cookie 不会返回浏览器端。':'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
  const headers={...HEADERS};
  if(owner.cookie)headers['set-cookie']=owner.cookie;
  await saveCachedNote(env,noteIdFromUrl(target.toString()),result);
@@ -342,7 +398,7 @@ async function resolve(req,env){
    const cooldown=await browserCooldown(env);
    if(cooldown){reason='BROWSER_COOLDOWN';}
    else{
-    try{return await browserPreview(req,env,url)}
+    try{return await browserPreview(req,env,url,shareHint)}
     catch(err){
      reason=String(err?.message||err).slice(0,90);
      if(reason.startsWith('BROWSER_HTTP_429')||reason.startsWith('BROWSER_HTTP_503'))await markBrowserCooldown(env,reason);
@@ -350,11 +406,12 @@ async function resolve(req,env){
    }
   }
   if(shareHint.title){
-   return reply({ok:true,title:shareHint.title,description:'',images:[],author:shareHint.author,noteType:'normal',sourceUrl:url,partial:true,mode:'share-text-title-only',notice:'已从分享文字识别标题，但小红书未公开返回正文和图片；正文保持为空，避免把平台页面文案误当原帖。'});
+   const fallback={ok:true,title:shareHint.title,description:'',images:[],author:shareHint.author,noteType:'normal',sourceUrl:url,partial:true,mode:'share-text-title-only',notice:'已从分享文字识别标题，但小红书未公开返回正文和图片；正文保持为空，避免把平台页面文案误当原帖。'};
+   return reply(fallback);
   }
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_COOKIE_INVALID','XHS_PARSER_DAILY_LIMIT','XHS_PARSER_RATE_LIMIT','XHS_PARSER_AUTH','XHS_PARSER_EMPTY','XHS_PARSER_TIMEOUT','XHS_PARSER_NETWORK','XHS_PARSER_PAGE_SHELL','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_COOKIE_INVALID','XHS_COOKIE_SESSION_MISSING','XHS_PARSER_DAILY_LIMIT','XHS_PARSER_RATE_LIMIT','XHS_PARSER_AUTH','XHS_PARSER_EMPTY','XHS_PARSER_TIMEOUT','XHS_PARSER_NETWORK','XHS_PARSER_PAGE_SHELL','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_COOKIE_INVALID'?'服务端小红书 Cookie 格式无效，请管理员重新配置。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_COOKIE_INVALID'?'服务端小红书 Cookie 格式无效，请管理员重新配置。':reason==='XHS_COOKIE_SESSION_MISSING'?'当前 Cookie 缺少 web_session，仍然不是有效登录态；请重新登录小红书后复制完整 Request Headers Cookie。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function cachedNoteImage(req,env,note,index){
