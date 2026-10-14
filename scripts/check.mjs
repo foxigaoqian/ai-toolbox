@@ -42,8 +42,9 @@ assert.ok(readFileSync('src/images.js','utf8').includes('真正的图生图语�
 
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
-const {parseXhsHtml,extractSharedUrl}=await import('../src/xhs.js');
+const {parseXhsHtml,extractSharedUrl,extractShareEnvelope}=await import('../src/xhs.js');
 assert.equal(extractSharedUrl('小红书公开笔记 http://xhslink.com/a/abc123 看看'),'https://xhslink.com/a/abc123');
+assert.deepEqual(extractShareEnvelope('35 【订婚后有必要住一起吗 - 圆圆 | 小红书 - 你的生活兴趣社区】 😆 https://www.xiaohongshu.com/discovery/item/6ac8924f000000001203c686'),{title:'订婚后有必要住一起吗',author:'圆圆'});
 assert.equal(extractSharedUrl('https://localhost/admin'),null);
 const fixture='<meta property="og:title" content="通勤整理技巧 - 小红书">'+
   '<meta content="整理桌面、规划早晨，创造更舒适的一天" name="description">'+
@@ -91,6 +92,11 @@ assert.equal(misleading.description,'');
 assert.equal(misleading.images.length,0);
 const shell=parseXhsHtml(loginHtml,'https://www.xiaohongshu.com/discovery/item/123');
 assert.equal(shell.title,'');
+const boilerplate=parseXhsHtml('<meta property="og:title" content="想了解些什么？"><meta property="og:description" content="在小红书，分享照片和视频，分享购物心得，记录生活故事，和最会生活的人做朋友。"><meta property="og:image" content="https://ci.xiaohongshu.com/generic.png">','https://www.xiaohongshu.com/discovery/item/123');
+assert.equal(boilerplate.title,'');
+assert.equal(boilerplate.description,'');
+assert.equal(boilerplate.images.length,1);
+assert.equal(boilerplate.mode,'generic-page-shell');
 
 const {handleXhsApi}=await import('../src/xhs.js');
 const cachedRecord={title:'结婚只办答谢宴是动了谁的蛋糕？',description:'公开笔记内容',images:['https://sns-webpic-qc.xhscdn.com/a.webp'],mode:'browser-public-note'};
