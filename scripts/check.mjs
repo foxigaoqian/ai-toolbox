@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {Script} from 'node:vm';
-for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js','src/xhs-ssr.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
+for(const file of ['src/index.js','src/generation.js','src/batches.js','src/provider.js','src/editor-client.js','src/images.js','src/xhs.js','src/xhs-client.js','src/xhs-ssr.js','src/xhs-external.js'])execFileSync(process.execPath,['--check',file],{stdio:'pipe'});
 const source=readFileSync('src/index.js','utf8');
 const a=source.indexOf('const TOOLS=')+'const TOOLS='.length;
 const b=source.indexOf(';\nconst HTML=',a);
@@ -105,6 +105,35 @@ const cachedImageResponse=await handleXhsApi(new Request('https://demo.invalid/a
 assert.equal(cachedImageResponse.status,200);
 assert.equal(cachedImageResponse.headers.get('content-type'),'image/webp');
 assert.equal(cachePayload.title,cachedRecord.title);
+
+const {normalizeEasyDownNote,safeMediaUrl,parseWithEasyDown}=await import('../src/xhs-external.js');
+const providerSample={
+ status:200,
+ data:{media:{title:'示例图文',images:[{url:'https://sns-i11.rednotecdn.com/photo.webp'}]},
+ platformData:{note_id:'6acb73cb000000001a03163f',title:'结婚只办答谢宴是动了谁的蛋糕？',desc:'婚礼不接亲，直接办答谢宴也可以。',
+ user:{nickname:'我不叫，喂'},images_list:[{original:'http://sns-i11.rednotecdn.com/photo.webp'}]}
+ }};
+const normalized=normalizeEasyDownNote(providerSample,'https://www.xiaohongshu.com/discovery/item/6acb73cb000000001a03163f');
+assert.equal(normalized.title,'结婚只办答谢宴是动了谁的蛋糕？');
+assert.equal(normalized.images.length,1);
+assert.ok(normalized.images[0].startsWith('https://sns-i11.rednotecdn.com/'));
+assert.equal(normalized.mode,'third-party-easydown');
+assert.equal(safeMediaUrl('https://localhost/img.jpg'),null);
+const previousFetch=globalThis.fetch;
+try{
+ let upstreamRequests=0;
+ globalThis.fetch=async(url,options)=>{
+  upstreamRequests++;
+  assert.equal(url,'https://api.easydown.org/api/v1/platforms/xiaohongshu/parse');
+  assert.equal(options.headers.authorization,'Bearer testEasyDown');
+  assert.equal(JSON.parse(options.body).url,'https://www.xiaohongshu.com/discovery/item/6acb73cb000000001a03163f');
+  return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>providerSample};
+ };
+ const parsed=await parseWithEasyDown({EASYDOWN_API_KEY:'testEasyDown'},'https://www.xiaohongshu.com/discovery/item/6acb73cb000000001a03163f');
+ assert.equal(upstreamRequests,1);
+ assert.equal(parsed.images.length,1);
+}finally{globalThis.fetch=previousFetch;}
+
 const xhsSource=readFileSync('src/xhs.js','utf8');
 assert.ok(xhsSource.includes('CF_BROWSER_API_TOKEN'));
 assert.ok(xhsSource.includes('browserCooldown'));
