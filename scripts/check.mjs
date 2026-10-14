@@ -31,6 +31,11 @@ new Script(XHS_CLIENT,{filename:'xhs-app.js'});
 assert.ok(XHS_CLIENT.includes('xhs-image-mode'));
 assert.ok(XHS_CLIENT.includes('xhs-style-lock'));
 assert.ok(XHS_CLIENT.includes("form.append('mode'"));
+assert.ok(XHS_CLIENT.includes('停止剩余图片请求'));
+assert.ok(XHS_CLIENT.includes('remix-reference.jpg'));
+assert.ok(XHS_CLIENT.includes("canvas.toBlob(resolve,'image/jpeg'"));
+assert.ok(readFileSync('src/images.js','utf8').includes('IMAGE_UPSTREAM_UNAVAILABLE'));
+
 
 assert.ok(html.includes('/xhs-app.js'));
 assert.ok(html.includes('window.xhsTransferToEditor'));
