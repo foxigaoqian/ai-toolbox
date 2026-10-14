@@ -31,12 +31,30 @@ export function extractSharedUrl(input){
  const tokens=text.match(/https?:\/\/[^\s<>"'，。]+/g)||[];
  const found=tokens.map(t=>t.replace(/[)\]）】,;]+$/,'')).find(t=>validXhs(t));return found?validXhs(found).toString():null;
 }
+export function extractShareEnvelope(input){
+ const text=String(input||'').replace(/\s+/g,' ').trim();
+ const block=text.match(/【([^】]{2,260})】/);if(!block)return {title:'',author:''};
+ let label=block[1].replace(/\s*\|\s*小红书(?:\s*-\s*你的生活兴趣社区)?\s*$/i,'').trim();
+ let title=label,author='';
+ const split=label.lastIndexOf(' - ');
+ if(split>0){title=label.slice(0,split).trim();author=label.slice(split+3).trim();}
+ // This hint comes only from the user's pasted share text. It must never be
+ // promoted into a made-up note body when the public page is unavailable.
+ return {title:title.slice(0,180),author:author.slice(0,120)};
+}
 function entityDecode(s){return String(s||'').replace(/&(#x[0-9a-f]+|#\d+|amp|quot|apos|lt|gt|nbsp);/gi,(m,n)=>{
  const k=n.toLowerCase();if(k==='amp')return '&';if(k==='quot')return '"';if(k==='apos')return "'";if(k==='lt')return '<';if(k==='gt')return '>';if(k==='nbsp')return ' ';
  if(k[0]==='#'){const num=k[1]==='x'?parseInt(k.slice(2),16):parseInt(k.slice(1),10);return num>0&&num<=0x10ffff?String.fromCodePoint(num):''}
  return m;
  })}
 function strip(s){return entityDecode(String(s||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ')).trim()}
+function genericShell(title,description){
+ const t=strip(title),d=strip(description);
+ const genericTitle=/^(?:小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)$/i.test(t);
+ const genericBody=/^(?:在小红书[，,]\s*)?分享照片和视频[，,]\s*分享购物心得[，,]\s*记录生活故事[，,]\s*和最会生活的人做朋友[。.]?$/i.test(d)||
+  /小红书.*(?:生活兴趣社区|分享照片和视频)/i.test(d);
+ return genericTitle||genericBody;
+}
 function metaTags(html){
  const meta={};
  for(const t of html.matchAll(/<meta\b[^>]*>/gi)){
@@ -90,8 +108,8 @@ export function parseXhsHtml(html,url=''){
  const article=jsonStringField(html,'desc');
  const description=strip(article||jsonBody||meta['og:description']||meta.description||'').slice(0,5500);
  // Generic login shells contain no note content. Never invent source material.
- const generic=description.length<50&&imgs.size===0&&(/^(小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)/i.test(title)||/^(小红书|REDnote|登录|发现)$/i.test(title));
- return {sourceUrl:url,title:generic?'':title,description:generic?'':description,images:Array.from(imgs).slice(0,9),mode:'public-page-preview',partial:imgs.size===0||!description};
+ const generic=genericShell(title,description)||(description.length<50&&imgs.size===0&&(/^(小红书|REDnote|登录小红书|发现精彩|想了解些什么[？?]?)/i.test(title)||/^(小红书|REDnote|登录|发现)$/i.test(title)));
+ return {sourceUrl:url,title:generic?'':title,description:generic?'':description,images:Array.from(imgs).slice(0,9),mode:generic?'generic-page-shell':'public-page-preview',partial:generic||imgs.size===0||!description};
 }
 async function readHtml(res){
  const contentType=(res.headers.get('content-type')||'').toLowerCase();
@@ -148,7 +166,7 @@ async function extractPublicNote(href){
    if(ssr)return safeResult(ssr);
    const meta=parseXhsHtml(page.html,page.url);
    // Never treat an empty browser/login shell as a successful note.
-   if(meta.description||meta.images.length)return safeResult(meta);
+   if(meta.mode!=='generic-page-shell'&&(meta.description||meta.images.length))return safeResult(meta);
    last='NOTE_NOT_PUBLICLY_EXTRACTABLE';
   }catch(e){
    const msg=String(e.message||e);
@@ -188,7 +206,7 @@ async function browserPreview(request,env,url){
  let parsed;
  try{parsed=parseXhsSsr(html,target.toString())}
  catch{parsed=parseXhsHtml(html,target.toString())}
- if(!parsed.description&&!parsed.images.length)throw Error('BROWSER_NOTE_EMPTY');
+ if(parsed.mode==='generic-page-shell'||genericShell(parsed.title,parsed.description)||!parsed.description&&!parsed.images.length)throw Error('BROWSER_NOTE_EMPTY');
  const result={ok:true,...parsed,mode:'browser-public-note',notice:'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
  const headers={...HEADERS};
  if(owner.cookie)headers['set-cookie']=owner.cookie;
@@ -210,6 +228,10 @@ async function getCachedNote(env,noteId){
   if(!row)return null;
   const obj=JSON.parse(row.result_json);
   if(typeof obj.description!=='string'||!Array.isArray(obj.images))return null;
+  if(genericShell(obj.title,obj.description)){
+   await env.DB.prepare('DELETE FROM xhs_note_cache WHERE note_id=?').bind(noteId).run().catch(()=>{});
+   return null;
+  }
   return publicNoteView({...obj,ok:true,cached:true,mode:obj.mode||'cached-public-note'},noteId);
  }catch{return null}
 }
@@ -247,7 +269,8 @@ async function markBrowserCooldown(env,reason){
 async function resolve(req,env){
  if(!(req.headers.get('content-type')||'').includes('application/json'))return reply({error:'INVALID_CONTENT_TYPE'},415);
  let body;try{body=await req.json()}catch{return reply({error:'INVALID_JSON'},400)}
- const url=extractSharedUrl(String(body.url||'').slice(0,3000));
+ const rawInput=String(body.url||'').slice(0,3000);
+ const url=extractSharedUrl(rawInput),shareHint=extractShareEnvelope(rawInput);
  if(!url)return reply({error:'INVALID_XHS_URL',message:'请粘贴完整的小红书公开笔记链接或分享文案'},422);
  if(!env.DB)return reply({error:'STORAGE_UNAVAILABLE'},503);
  const requested=validXhs(url),cacheId=requested&&noteIdFromUrl(requested.toString());
@@ -289,6 +312,9 @@ async function resolve(req,env){
      if(reason.startsWith('BROWSER_HTTP_429')||reason.startsWith('BROWSER_HTTP_503'))await markBrowserCooldown(env,reason);
     }
    }
+  }
+  if(shareHint.title){
+   return reply({ok:true,title:shareHint.title,description:'',images:[],author:shareHint.author,noteType:'normal',sourceUrl:url,partial:true,mode:'share-text-title-only',notice:'已从分享文字识别标题，但小红书未公开返回正文和图片；正文保持为空，避免把平台页面文案误当原帖。'});
   }
   const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
