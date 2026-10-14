@@ -180,7 +180,52 @@ async function browserPreview(request,env,url){
  const result={ok:true,...parsed,mode:'browser-public-note',notice:'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
  const headers={...HEADERS};
  if(owner.cookie)headers['set-cookie']=owner.cookie;
+ await saveCachedNote(env,noteIdFromUrl(target.toString()),result);
  return new Response(JSON.stringify(result),{status:200,headers});
+}
+
+
+/** Short-lived note caching reduces Browser Run load and upstream expiring-image failures. */
+const seconds=()=>Math.floor(Date.now()/1000);
+async function getCachedNote(env,noteId){
+ if(!noteId||!env.DB)return null;
+ try{
+  const row=await env.DB.prepare('SELECT result_json FROM xhs_note_cache WHERE note_id=? AND expires_at>?').bind(noteId,seconds()).first();
+  if(!row)return null;
+  const obj=JSON.parse(row.result_json);
+  if(typeof obj.description!=='string'||!Array.isArray(obj.images))return null;
+  return {...obj,ok:true,cached:true,mode:obj.mode||'cached-public-note'};
+ }catch{return null}
+}
+async function saveCachedNote(env,noteId,result){
+ if(!noteId||!env.DB||!result||(!result.description&&!result.images?.length))return;
+ const clean={
+  title:String(result.title||'').slice(0,180),
+  description:String(result.description||'').slice(0,5500),
+  images:Array.isArray(result.images)?result.images.filter(x=>typeof x==='string').slice(0,9):[],
+  author:String(result.author||'').slice(0,120),
+  noteType:String(result.noteType||'normal').slice(0,40),
+  sourceUrl:'https://www.xiaohongshu.com/discovery/item/'+noteId,
+  partial:!!result.partial,
+  mode:String(result.mode||'public-page-preview')
+ };
+ const now=seconds();
+ // Xiaohongshu image URLs often contain short-lived signatures.
+ await env.DB.prepare('INSERT INTO xhs_note_cache(note_id,result_json,created_at,expires_at) VALUES(?,?,?,?) ON CONFLICT(note_id) DO UPDATE SET result_json=excluded.result_json,created_at=excluded.created_at,expires_at=excluded.expires_at')
+  .bind(noteId,JSON.stringify(clean),now,now+420).run().catch(()=>{});
+}
+async function browserCooldown(env){
+ try{
+  const row=await env.DB.prepare('SELECT reason,until_ts FROM xhs_parse_cooldown WHERE scope=?').bind('browser:public-xhs').first();
+  return row&&Number(row.until_ts)>seconds()?row.reason:null;
+ }catch{return null}
+}
+async function markBrowserCooldown(env,reason){
+ try{
+  const ttl=reason==='BROWSER_HTTP_429'||reason==='BROWSER_HTTP_503'?180:60;
+  await env.DB.prepare('INSERT INTO xhs_parse_cooldown(scope,until_ts,reason) VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET until_ts=excluded.until_ts,reason=excluded.reason')
+   .bind('browser:public-xhs',seconds()+ttl,reason).run();
+ }catch{}
 }
 
 async function resolve(req,env){
@@ -189,21 +234,32 @@ async function resolve(req,env){
  const url=extractSharedUrl(String(body.url||'').slice(0,3000));
  if(!url)return reply({error:'INVALID_XHS_URL',message:'请粘贴完整的小红书公开笔记链接或分享文案'},422);
  if(!env.DB)return reply({error:'STORAGE_UNAVAILABLE'},503);
+ const requested=validXhs(url),cacheId=requested&&noteIdFromUrl(requested.toString());
+ const existing=await getCachedNote(env,cacheId);
+ if(existing)return reply(existing);
  const day=new Date().toISOString().slice(0,10);
  const use=await env.DB.prepare("INSERT INTO usage_limits(day,scope,used) VALUES(?,?,1) ON CONFLICT(day,scope) DO UPDATE SET used=used+1 WHERE used<80").bind(day,'global:xhs-preview').run();
  if(!use.meta?.changes)return reply({error:'PREVIEW_LIMIT',message:'今天公开链接解析次数已用完'},429);
  try{
-  return reply(await extractPublicNote(url));
+  const result=await extractPublicNote(url);
+  await saveCachedNote(env,cacheId,result);
+  return reply(result);
  }catch(e){
   let reason=String(e?.message||e).slice(0,90);
-  const requested=validXhs(url);
-  if(requested&&noteIdFromUrl(requested.toString())&&env.BROWSER&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
-   try{return await browserPreview(req,env,url)}
-   catch(err){reason=String(err?.message||err).slice(0,90)}
+  if(cacheId&&env.BROWSER&&['LOGIN_REQUIRED','SOURCE_RESTRICTED','NOTE_NOT_PUBLICLY_EXTRACTABLE','XHS_SSR_ABSENT','XHS_SSR_NOTE_MISSING'].includes(reason)){
+   const cooldown=await browserCooldown(env);
+   if(cooldown){reason='BROWSER_COOLDOWN';}
+   else{
+    try{return await browserPreview(req,env,url)}
+    catch(err){
+     reason=String(err?.message||err).slice(0,90);
+     if(reason.startsWith('BROWSER_HTTP_429')||reason.startsWith('BROWSER_HTTP_503'))await markBrowserCooldown(env,reason);
+    }
+   }
   }
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503']);
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function imageProxy(req){
