@@ -106,8 +106,10 @@ async function resolve(){
   $('xhs-source-title').value=d.title||'';$('xhs-source-text').value=d.description||'';clearPhotos();
   addPhotos((d.images||[]).map(u=>({src:u.startsWith('/api/xhs/image?')?u:'/api/xhs/image?url='+encodeURIComponent(u),origin:u,local:false})));
   const n=(d.images||[]).length;
-  $('xhs-source-summary').textContent='解析完成 · '+(d.description?.length||0)+' 字文案 · '+n+' 张图片'+(d.partial?'（部分素材可能未公开）':'');
-  if(!d.description)warn('只获取到部分信息，请手动补充参考文案。');else if(!n)warn('文字已获取，但图片未获取，可手动上传原图。');
+  const titleOnly=d.mode==='share-text-title-only';
+  $('xhs-source-summary').textContent=(titleOnly?'已识别分享标题':'解析完成')+' · '+(d.description?.length||0)+' 字文案 · '+n+' 张图片'+(d.partial?'（部分素材未获取）':'');
+  if(titleOnly)warn('小红书没有公开返回这条笔记的正文和图片；标题已从你粘贴的分享文字识别，正文保持为空，避免生成错误内容。请手动补充原文和原图。');
+  else if(!d.description)warn('只获取到部分信息，请手动补充参考文案。');else if(!n)warn('文字已获取，但图片未获取，可手动上传原图。');
  }catch(e){warn(friendlyError(e.message,'解析')+' 可在下方手动粘贴文案或上传图片。');$('xhs-source-summary').textContent='未能自动获取公开笔记';}
  finally{button.disabled=false;button.textContent='解析公开笔记';}
 }
