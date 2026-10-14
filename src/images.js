@@ -2,7 +2,7 @@ import {generateImage,remakeImage,providerStatus} from './provider.js';
 import {getSession,reserveQuota,refundQuota,sendJson} from './generation.js';
 
 // Paid external image calls are off until the image-group token is configured.
-// Public beta: max 10 requests/day site-wide and 2 requests/day per browser.
+// Public beta: max 20 image requests/day site-wide, 6 per browser; no automatic retries.
 const MAX_IMAGE_BYTES=6*1024*1024;
 function sniff(bytes){
  if(bytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return {mime:'image/png',ext:'png'};
@@ -98,8 +98,17 @@ async function remix(req,env){
   if(reserved&&owner)await refundQuota(env.DB,'session:images:'+owner.id);
   await refundQuota(env.DB,'global:images');
   const detail=String(e?.message||e);
-  return sendJson({error:'IMAGE_EDIT_FAILED',detail:detail.startsWith('IMAGE_')?detail:'IMAGE_SERVICE_UNAVAILABLE',
-   message:detail.startsWith('IMAGE_EDIT_HTTP_')?'图片中转站拒绝该模型的图生图调用，请检查图片分组是否支持 /images/edits。':'图片 AI 复刻失败，请稍后重试或检查分组接口权限'},503,owner?.cookie||'');
+  const upstreamStatus=Number(detail.match(/^IMAGE_EDIT_HTTP_(\d{3})$/)?.[1]||0);
+  const gatewayFail=[500,502,503,504].includes(upstreamStatus);
+  const message=upstreamStatus===502?'图片中转站返回502。该请求未获得有效图像，可能是上游通道暂时故障或当前参考图处理失败；已停止建议的后续批量请求，请稍后只试1张。':
+    gatewayFail?'中转站图片通道暂时不可用，请稍后仅尝试1张，或查中转站调用日志。':
+    upstreamStatus===429?'中转站图片模型限流，稍后再试。':
+    upstreamStatus===401||upstreamStatus===403?'图片模型 Key 权限有误，请检查中转站分组和模型权限。':
+    upstreamStatus===404?'图片模型或 /images/edits 接口不存在，请核对中转站支持情况。':
+    '图片 AI 复刻失败，请检查模型权限和请求格式。';
+  return sendJson({error:gatewayFail?'IMAGE_UPSTREAM_UNAVAILABLE':'IMAGE_EDIT_FAILED',detail:detail.startsWith('IMAGE_')?detail:'IMAGE_SERVICE_UNAVAILABLE',
+    message,retryable:false,upstreamStatus:upstreamStatus||undefined},
+    gatewayFail?502:upstreamStatus===429?429:503,owner?.cookie||'');
  }
 }
 
