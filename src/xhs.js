@@ -127,6 +127,25 @@ const BROWSER_HEADERS={
  'accept-language':'zh-CN,zh;q=0.9,en;q=0.8',
  'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 };
+/** Convert a server-side Cookie header or exported cookie JSON into Browser Run cookies. */
+export function parseXhsCookieSecret(raw){
+ const input=String(raw||'').trim();if(!input||input.length>32000)return [];
+ let values=[];
+ if(input[0]==='['){
+  try{const parsed=JSON.parse(input);if(Array.isArray(parsed))values=parsed}catch{return []}
+ }else{
+  values=input.split(';').map(part=>{const at=part.indexOf('=');return at>0?{name:part.slice(0,at).trim(),value:part.slice(at+1).trim()}:null}).filter(Boolean);
+ }
+ const out=[],seen=new Set();
+ for(const item of values.slice(0,80)){
+  const name=String(item?.name||'').trim(),value=String(item?.value||'');
+  if(!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,120}$/.test(name)||value.length>5000||seen.has(name))continue;
+  const domain=String(item?.domain||'.xiaohongshu.com').toLowerCase().replace(/^www\./,'.');
+  if(domain!=='xiaohongshu.com'&&domain!=='.xiaohongshu.com'&&!domain.endsWith('.xiaohongshu.com'))continue;
+  seen.add(name);out.push({name,value,domain:domain==='xiaohongshu.com'?'.xiaohongshu.com':domain,path:'/',secure:true});
+ }
+ return out;
+}
 async function fetchPage(href){
  let url=validXhs(href);if(!url)throw Error('INVALID_XHS_URL');
  for(let i=0;i<5;i++){
@@ -187,7 +206,10 @@ async function browserPreview(request,env,url){
  if(!await reserveQuota(env.DB,'global:xhs-browser',10))throw Error('BROWSER_PREVIEW_LIMIT');
  if(!await reserveQuota(env.DB,'session:xhs-browser:'+owner.id,3))throw Error('BROWSER_SESSION_LIMIT');
  const target=validXhs(url);if(!target||!noteIdFromUrl(target.toString()))throw Error('INVALID_XHS_URL');
- const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:900};
+ const requestPayload={url:target.toString(),gotoOptions:{waitUntil:'domcontentloaded',timeout:19000},waitForTimeout:1200};
+ const cookies=parseXhsCookieSecret(env.XHS_COOKIE);
+ if(env.XHS_COOKIE&&!cookies.length)throw Error('XHS_COOKIE_INVALID');
+ if(cookies.length)requestPayload.cookies=cookies;
  // REST is optional and uses a distinct Browser Run API token; not the Square API key.
  // Cloudflare REST can have different rate limits from the Worker binding.
  let response;
@@ -207,7 +229,7 @@ async function browserPreview(request,env,url){
  try{parsed=parseXhsSsr(html,target.toString())}
  catch{parsed=parseXhsHtml(html,target.toString())}
  if(parsed.mode==='generic-page-shell'||genericShell(parsed.title,parsed.description)||!parsed.description&&!parsed.images.length)throw Error('BROWSER_NOTE_EMPTY');
- const result={ok:true,...parsed,mode:'browser-public-note',notice:'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
+ const result={ok:true,...parsed,mode:cookies.length?'browser-authenticated-note':'browser-public-note',notice:cookies.length?'已使用管理员配置的服务端登录态读取公开笔记；Cookie 不会返回浏览器端。':'仅提取公开浏览器页面内容，不保证所有笔记均可访问。'};
  const headers={...HEADERS};
  if(owner.cookie)headers['set-cookie']=owner.cookie;
  await saveCachedNote(env,noteIdFromUrl(target.toString()),result);
@@ -330,9 +352,9 @@ async function resolve(req,env){
   if(shareHint.title){
    return reply({ok:true,title:shareHint.title,description:'',images:[],author:shareHint.author,noteType:'normal',sourceUrl:url,partial:true,mode:'share-text-title-only',notice:'已从分享文字识别标题，但小红书未公开返回正文和图片；正文保持为空，避免把平台页面文案误当原帖。'});
   }
-  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_PARSER_DAILY_LIMIT','XHS_PARSER_RATE_LIMIT','XHS_PARSER_AUTH','XHS_PARSER_EMPTY','XHS_PARSER_TIMEOUT','XHS_PARSER_NETWORK','XHS_PARSER_PAGE_SHELL','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
+  const codes=new Set(['SOURCE_RESTRICTED','SOURCE_NOT_FOUND','LOGIN_REQUIRED','NOT_PUBLIC_HTML','UNSUPPORTED_REDIRECT','TOO_MANY_REDIRECTS','PAGE_TOO_LARGE','BROWSER_PREVIEW_LIMIT','BROWSER_SESSION_LIMIT','BROWSER_NOTE_EMPTY','BROWSER_RENDER_FAILED','BROWSER_HTTP_429','BROWSER_HTTP_403','BROWSER_HTTP_500','BROWSER_HTTP_503','BROWSER_COOLDOWN','XHS_COOKIE_INVALID','XHS_PARSER_DAILY_LIMIT','XHS_PARSER_RATE_LIMIT','XHS_PARSER_AUTH','XHS_PARSER_EMPTY','XHS_PARSER_TIMEOUT','XHS_PARSER_NETWORK','XHS_PARSER_PAGE_SHELL','XHS_EXTERNAL_DAILY_LIMIT','XHS_EXTERNAL_RATE_LIMIT','XHS_EXTERNAL_AUTH','XHS_EXTERNAL_EMPTY']);
   if(reason==='LOGIN_REQUIRED')return reply({error:'LOGIN_REQUIRED',message:'小红书将该链接跳转到了登录页，无法自动读取原帖正文和图片。请手动粘贴参考文案并上传图片。'},422);
-  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
+  return reply({error:codes.has(reason)?reason:'SOURCE_FETCH_FAILED',message:reason==='BROWSER_PREVIEW_LIMIT'||reason==='BROWSER_SESSION_LIMIT'?'今日浏览器解析次数达到限制，可稍后重试或手动导入。':reason==='XHS_COOKIE_INVALID'?'服务端小红书 Cookie 格式无效，请管理员重新配置。':reason==='XHS_PARSER_DAILY_LIMIT'?'自建解析服务今日体验额度已用完，请稍后重试或手动导入。':reason==='XHS_PARSER_AUTH'?'自建解析服务鉴权失败，请管理员检查服务 Token。':reason==='XHS_PARSER_TIMEOUT'||reason==='XHS_PARSER_NETWORK'?'自建解析服务暂时不可用，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_DAILY_LIMIT'?'第三方解析接口今日试用额度已用完，请稍后重试或手动导入。':reason==='XHS_EXTERNAL_AUTH'?'第三方解析接口的 Key 或权限不正确，请管理员检查配置。':reason==='BROWSER_COOLDOWN'?'浏览器解析服务暂时受限，为避免反复失败已暂停几分钟，请稍后重试或手动导入。':reason==='BROWSER_HTTP_429'?'Cloudflare Browser Run 当前达到限流上限，请稍后重试。也可以先手动导入图片与文案。':reason==='BROWSER_RENDER_FAILED'?'公开浏览器渲染暂时不可用，请稍后重试或手动导入。':'无法读取公开笔记，可能需要登录或分享链接已失效；可手动导入图片及文案。'},422);
  }
 }
 async function cachedNoteImage(req,env,note,index){
