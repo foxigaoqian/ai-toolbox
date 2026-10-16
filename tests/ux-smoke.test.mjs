@@ -44,5 +44,9 @@ test('Xiaohongshu workspace exposes a direct path to editing',()=>{
  assert.match(XHS_CLIENT,/xhs-direct-editor/);
  assert.match(XHS_CLIENT,/xhs-form\.v1/);
  assert.match(XHS_CLIENT,/高级选项/);
- assert.match(XHS_CLIENT,/无需生图，直接进入套图编辑器/);
+ assert.match(XHS_CLIENT,/直接进入图文编辑器/);
+ assert.match(XHS_CLIENT,/xw-sidebar/);
+ assert.match(XHS_CLIENT,/wizardLayout\(body\)/);
+ assert.match(XHS_CLIENT,/xw-go-2/);
+ assert.match(XHS_CLIENT,/xw-finish/);
 });
