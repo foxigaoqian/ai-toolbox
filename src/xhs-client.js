@@ -29,7 +29,7 @@ function addPhotos(list){
 }
 function showPhotos(){
  const node=$('xhs-photos');if(!node)return;node.replaceChildren();
- if(!picked.length){node.innerHTML='<p class="form-hint">暂无参考图片。可先解析链接，或手动上传原图。</p>';stateSummary();return;}
+ if(!picked.length){node.innerHTML='<p class="form-hint">暂无参考图片。可先解析链接，或手动上传原图。</p>';stateSummary();wizardSummary();return;}
  const wrapper=document.createElement('div');
  wrapper.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px';
  for(const item of picked){
@@ -37,7 +37,7 @@ function showPhotos(){
   frame.style.cssText='min-width:0;display:flex;flex-direction:column;gap:8px;border:1px solid #dfe6f2;padding:9px;border-radius:13px;background:white';
   const label=document.createElement('label');label.style.cssText='display:flex;align-items:center;gap:7px;min-height:28px;cursor:pointer;font-size:12px;color:#59677d';
   const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=item.chosen;
-  checkbox.onchange=()=>{item.chosen=checkbox.checked;stateSummary();};
+  checkbox.onchange=()=>{item.chosen=checkbox.checked;stateSummary();wizardSummary();};
   const status=document.createElement('span');
   status.textContent=item.status==='working'?'正在理解并重绘…':item.remade?'已完成语义图生图':'选中这张原图';
   label.append(checkbox,status);frame.append(label);
@@ -60,7 +60,7 @@ function showPhotos(){
   }
   wrapper.append(frame);
  }
- node.append(wrapper);stateSummary();
+ node.append(wrapper);stateSummary();wizardSummary();
 }
 function clearPhotos(){for(const im of picked){if(im.local)URL.revokeObjectURL(im.src);}picked=[];showPhotos();}
 function trimText(){return ($('xhs-source-text')?.value||'').trim();}
@@ -82,6 +82,7 @@ function showDraft(d){
  '<div class="actions"><button class="primary-btn" id="xhs-to-editor">用新图和新文案制作套图</button>'+
  '<button class="ghost-btn" id="xhs-copy">复制新文案</button><button class="ghost-btn" id="xhs-save-edit">保存修改</button></div>'+
  '<p id="xhs-draft-status" class="form-hint" aria-live="polite"></p></section>';
+ wizardSummary();
  $('xhs-to-editor').onclick=()=>transfer($('xhs-draft-title').value,$('xhs-draft-body').value);
  $('xhs-copy').onclick=async()=>{try{await navigator.clipboard.writeText($('xhs-draft-title').value+'\n\n'+$('xhs-draft-body').value);$('xhs-draft-status').textContent='已复制';}catch{$('xhs-draft-status').textContent='自动复制失败，请手动复制';}};
  $('xhs-save-edit').onclick=async()=>{
@@ -108,6 +109,7 @@ async function resolve(){
   const n=(d.images||[]).length;
   const titleOnly=d.mode==='share-text-title-only';
   $('xhs-source-summary').textContent=(titleOnly?'已识别分享标题':'解析完成')+' · '+(d.description?.length||0)+' 字文案 · '+n+' 张图片'+(d.partial?'（部分素材未获取）':'');
+  wizardSummary();
   if(titleOnly)warn('小红书没有公开返回这条笔记的正文和图片；标题已从你粘贴的分享文字识别，正文保持为空，避免生成错误内容。请手动补充原文和原图。');
   else if(!d.description)warn('只获取到部分信息，请手动补充参考文案。');else if(!n)warn('文字已获取，但图片未获取，可手动上传原图。');
  }catch(e){warn(friendlyError(e.message,'解析')+' 可在下方手动粘贴文案或上传图片。');$('xhs-source-summary').textContent='未能自动获取公开笔记';}
@@ -199,8 +201,92 @@ async function redrawSelected(){
  button.disabled=false;button.textContent='图生图复刻选中图片';
 }
 
+
+let xhsWizard=null;
+function wizardSummary(){
+ if(!xhsWizard||!xhsWizard.shell.isConnected)return;
+ const title=$('xhs-source-title')?.value.trim()||'尚未识别标题';
+ const body=$('xhs-source-text')?.value.trim()||'尚未输入参考正文';
+ const newTitle=$('xhs-draft-title')?.value.trim();
+ const newText=$('xhs-draft-body')?.value.trim();
+ const n=picked.filter(x=>x.chosen).length;
+ const remade=picked.filter(x=>x.chosen&&x.remade).length;
+ const imp=$('xw-import-status');
+ if(imp){imp.querySelector('strong').textContent=title;imp.querySelector('p').textContent=body.slice(0,120)+(body.length>120?'…':'')+' · '+n+' 张已选图片';}
+ const one=$('xw-source-title');if(one)one.textContent=title;
+ const two=$('xw-source-body');if(two)two.textContent=body;
+ const out=$('xw-export-title');if(out)out.textContent=newTitle||title;
+ const outText=$('xw-export-text');if(outText)outText.textContent=(newText||body).slice(0,160)+((newText||body).length>160?'…':'');
+ const count=$('xw-export-images');if(count)count.textContent=n+' 张已选图片'+(remade?'（其中 '+remade+' 张已重绘）':'');
+ const indicator=$('xw-copy-badge');if(indicator)indicator.textContent=newText?'已生成新文案':'尚未生成 · 可用参考文案继续';
+}
+function wizardHasSource(){return !!(($('xhs-source-title')?.value||'').trim()||($('xhs-source-text')?.value||'').trim());}
+function wizardStep(n){
+ if(!xhsWizard)return;
+ if(n>1&&!wizardHasSource()){wizardStep(1);warn('请先解析链接，或展开“手动修改参考内容”填写标题或正文。');return;}
+ const msg=$('xhs-message');if(msg){msg.hidden=true;msg.textContent='';}
+ xhsWizard.active=n;
+ for(const panel of xhsWizard.panels)panel.hidden=Number(panel.dataset.step)!==n;
+ for(const button of xhsWizard.nav){const current=Number(button.dataset.step)===n;if(current)button.setAttribute('aria-current','step');else button.removeAttribute('aria-current');}
+ wizardSummary();
+ if(n===1){const detail=$('xw-manual-edit');if(detail&&!wizardHasSource())detail.open=false;}
+ xhsWizard.shell.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function wizardLayout(body){
+ if(!$('xhs-share-link'))return;
+ if(!document.getElementById('xhs-wizard-styles')){
+  const styles=document.createElement('style');styles.id='xhs-wizard-styles';styles.textContent="\n/* Standalone Xiaohongshu creator: guided, concise, accessible. */\n.xw-shell{max-width:100%;color:#172340;--xw-muted:#77859d;--xw-primary:#5f63e9}\n.xw-hero{padding:8px 2px 23px;border-bottom:1px solid #edf0f6}\n.xw-eyebrow{font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.14em;color:#6961d7}\n.xw-hero h2{font-size:clamp(24px,2.8vw,31px);letter-spacing:-.035em;line-height:1.23;margin:7px 0;color:#1f2841}\n.xw-hero p{font-size:13px;color:#77859d;margin:0;line-height:1.7}\n.xw-layout{display:grid;grid-template-columns:215px minmax(0,1fr);gap:22px;margin-top:24px;align-items:start}\n.xw-sidebar{background:#f8f9ff;border:1px solid #e9edf7;border-radius:17px;padding:12px;position:sticky;top:90px}\n.xw-sidebar h3{color:#97a1b4;font-size:11px;letter-spacing:.09em;margin:8px 10px 14px}\n.xw-step{border:0;border-radius:11px;text-align:left;background:transparent;color:#66748f;padding:12px 10px;display:flex;gap:10px;width:100%;align-items:center;cursor:pointer;transition:background .2s}\n.xw-step:hover{background:#eceffd}.xw-step[aria-current=\"step\"]{background:#edeefe;color:#4e55c3;font-weight:800}\n.xw-step-index{border:1px solid #dce1ef;background:#fff;color:#7b86a1;border-radius:9px;width:29px;height:29px;display:grid;place-items:center;flex:0 0 29px;font-size:12px;font-weight:800}\n.xw-step[aria-current=\"step\"] .xw-step-index{background:#6664ed;color:white;border-color:#6664ed}\n.xw-step span:last-child{display:grid;gap:2px}.xw-step small{font-size:10px;color:#9aa3b7;font-weight:500;line-height:1.45}\n.xw-side-note{margin:20px 10px 8px;padding-top:14px;border-top:1px solid #e1e6f0;font-size:11px;line-height:1.7;color:#8b94a8}\n.xw-workspace{min-width:0}\n.xw-panel{border:1px solid #e6ebf3;border-radius:18px;padding:27px 28px;background:white;box-shadow:0 5px 24px #293b7107}\n.xw-panel[hidden]{display:none!important}\n.xw-panel-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:22px}\n.xw-panel-icon{width:42px;height:42px;background:#f0efff;border-radius:12px;display:grid;place-items:center;color:#635be1;font-weight:800;font-size:17px;flex-shrink:0}\n.xw-panel-head h3{font-size:20px;letter-spacing:-.02em;margin:0 0 6px;color:#222d47}\n.xw-panel-head p{font-size:12px;color:#8794a8;margin:0;line-height:1.7}\n.xw-panel .form-label{margin-top:14px}\n.xw-panel .field{border-radius:11px;border-color:#dfe5ef;padding:14px 15px}\n.xw-panel .field:focus{box-shadow:0 0 0 3px #6565dd16}\n.xw-panel #xhs-share-link{min-height:105px!important;font-size:14px;line-height:1.75;resize:vertical}\n.xw-panel .primary-btn{min-height:43px;border-radius:11px;padding:12px 19px}\n.xw-panel .ghost-btn{border-radius:11px}\n.xw-panel .actions{display:flex;flex-wrap:wrap;gap:10px}\n.xw-panel .note{font-size:12px;border-radius:11px}\n.xw-quick-summary{padding:16px 17px;border-radius:13px;border:1px solid #e1e6f5;background:#f9faff;margin:17px 0 6px}\n.xw-quick-summary strong{font-size:13px;color:#263452}\n.xw-quick-summary p{font-size:12px;color:#818ca1;margin:7px 0 0;line-height:1.6}\n.xw-manual-details{border:1px solid #e9ecf6;border-radius:12px;padding:10px 15px;margin-top:18px}\n.xw-manual-details summary{cursor:pointer;font-size:12px;color:#5364c3;font-weight:750;padding:6px 0}\n.xw-manual-details[open]{padding-bottom:18px}\n.xw-panel footer.xw-actions{border-top:1px solid #edf0f6;margin-top:24px;padding-top:21px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}\n.xw-actions .primary-btn{min-width:155px}\n.xw-inline-tip{font-size:12px;color:#98a3b4;line-height:1.5}\n.xw-step-body>section{border:none!important;padding:0!important;margin:0!important}\n.xw-step-body h3:first-child{display:none}\n.xw-step-body>section>.form-hint:first-of-type{margin-bottom:17px}\n.xw-source-mini{border-radius:12px;background:#f7f8fb;border:1px solid #ecedf4;padding:15px;margin-bottom:17px}\n.xw-source-mini small{display:block;font-size:10px;color:#8895ab;font-weight:800;margin-bottom:5px}\n.xw-source-mini strong{display:block;font-size:14px}\n.xw-source-mini p{color:#7f8b9f;font-size:12px;line-height:1.65;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}\n.xw-step-body #xhs-output>section{background:#fafbff;border-color:#e6e8fa!important;padding:18px!important}\n.xw-step-body #xhs-output textarea{min-height:160px!important}\n.xw-step-body #xhs-photos>div{grid-template-columns:repeat(auto-fill,minmax(155px,1fr))!important;gap:10px!important}\n.xw-step-body #xhs-photos img{height:135px!important}\n.xw-photo-area{border:1px solid #ebedf4;border-radius:14px;padding:15px;background:#fafbfe;margin:0 0 20px}\n.xw-photo-area .form-label{margin-top:12px}\n.xw-export-summary{display:grid;gap:10px}\n.xw-summary-item{background:#f8faff;border:1px solid #e6eafa;padding:15px 16px;border-radius:12px}\n.xw-summary-item span{display:block;font-size:11px;color:#8693aa;margin-bottom:6px}\n.xw-summary-item strong{display:block;font-size:14px;color:#233253;white-space:pre-wrap;overflow-wrap:anywhere}\n.xw-finale{background:linear-gradient(125deg,#f2f0ff,#f8f9ff);border-radius:14px;padding:22px;margin-top:17px}\n.xw-finale h4{font-size:17px;margin:0 0 7px}.xw-finale p{color:#75829a;font-size:12px;line-height:1.65}\n.xw-finale .primary-btn{margin-top:10px}\n.xw-workspace #xhs-message[hidden]{display:none!important}\n.xw-workspace #xhs-message{margin:0 0 13px}\n@media(max-width:860px){.xw-layout{grid-template-columns:1fr;gap:16px}.xw-sidebar{position:static;padding:10px;display:flex;flex-direction:column}.xw-sidebar h3,.xw-side-note{display:none}.xw-sidebar-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}.xw-step{flex-direction:column;align-items:center;text-align:center;padding:8px 3px;gap:4px}.xw-step span:last-child{font-size:11px}.xw-step small{display:none}}\n@media(max-width:570px){.xw-hero{padding-bottom:18px}.xw-layout{margin-top:15px}.xw-panel{padding:19px 16px;border-radius:14px}.xw-panel-head h3{font-size:18px}.xw-panel-head{gap:9px;margin-bottom:15px}.xw-panel-icon{width:35px;height:35px;font-size:15px}.xw-panel footer.xw-actions{align-items:stretch;flex-direction:column-reverse}.xw-panel footer.xw-actions>button{width:100%}.xw-step-body #xhs-photos>div{grid-template-columns:repeat(2,minmax(0,1fr))!important}.xw-step-body #xhs-photos img{height:110px!important}}\n";document.head.appendChild(styles);
+ }
+ const old=Array.from(body.children);
+ const rewriteSection=old.find(n=>n.tagName==='SECTION'&&n.querySelector('#xhs-rewrite'));
+ const imageSection=old.find(n=>n.tagName==='SECTION'&&n.querySelector('#xhs-redraw'));
+ if(!rewriteSection||!imageSection)return;
+ const importNodes=old.slice(2,old.indexOf(rewriteSection));
+ const shell=document.createElement('div');shell.className='xw-shell';
+ shell.innerHTML='<div class="xw-hero"><span class="xw-eyebrow">AI CONTENT STUDIO</span><h2>参考内容，一步步变成新作品</h2><p>导入参考笔记 → 改写文案 → 按需处理图片 → 进入编辑器导出。每一步只展示当前需要的操作。</p></div>'+
+ '<div class="xw-layout"><aside class="xw-sidebar"><h3>CREATION FLOW</h3><div class="xw-sidebar-nav" id="xw-nav">'+
+ '<button type="button" class="xw-step" data-step="1"><span class="xw-step-index">01</span><span>导入内容<small>链接 / 文字</small></span></button>'+
+ '<button type="button" class="xw-step" data-step="2"><span class="xw-step-index">02</span><span>改写文案<small>生成 / 修改</small></span></button>'+
+ '<button type="button" class="xw-step" data-step="3"><span class="xw-step-index">03</span><span>图片处理<small>可选 AI 重绘</small></span></button>'+
+ '<button type="button" class="xw-step" data-step="4"><span class="xw-step-index">04</span><span>编辑导出<small>确认 / 完成</small></span></button></div>'+
+ '<div class="xw-side-note">你的操作只聚焦当前步骤。解析失败时，可以手动补充素材继续，不必重新开始。</div></aside>'+
+ '<div class="xw-workspace" id="xw-workspace">'+
+ '<section class="xw-panel" data-step="1"><header class="xw-panel-head"><div class="xw-panel-icon">↗</div><div><h3>导入参考笔记</h3><p>粘贴小红书链接或分享文本，一键提取标题、正文和图片。</p></div></header><div class="xw-step-body" id="xw-import-body"></div>'+
+ '<div class="xw-quick-summary" id="xw-import-status" aria-live="polite"><strong>等待导入参考素材</strong><p>解析失败时可以手动填写，下个步骤同样可以继续。</p></div>'+
+ '<footer class="xw-actions"><span class="xw-inline-tip">有标题或正文后，即可继续</span><button type="button" class="primary-btn" id="xw-go-2">继续：改写文案 →</button></footer></section>'+
+ '<section class="xw-panel" data-step="2" hidden><header class="xw-panel-head"><div class="xw-panel-icon">✎</div><div><h3>生成你的新文案</h3><p>保留核心观点，调整表达方式；生成后可直接编辑标题与正文。</p></div></header><div class="xw-source-mini"><small>参考内容</small><strong id="xw-source-title"></strong><p id="xw-source-body"></p></div>'+
+ '<div class="xw-step-body" id="xw-copy-body"></div><footer class="xw-actions"><button type="button" class="ghost-btn" data-xw-back="1">← 上一步</button><button type="button" class="primary-btn" id="xw-go-3">继续：选择图片 →</button></footer></section>'+
+ '<section class="xw-panel" data-step="3" hidden><header class="xw-panel-head"><div class="xw-panel-icon">▧</div><div><h3>处理参考图片</h3><p>可使用原图排版，也可以消耗 AI 额度重绘。图片处理不是必选。</p></div></header><div class="xw-photo-area" id="xw-photo-area"></div>'+
+ '<div class="xw-step-body" id="xw-image-body"></div><footer class="xw-actions"><button type="button" class="ghost-btn" data-xw-back="2">← 上一步</button><button type="button" class="primary-btn" id="xw-go-4">跳过重绘 / 下一步 →</button></footer></section>'+
+ '<section class="xw-panel" data-step="4" hidden><header class="xw-panel-head"><div class="xw-panel-icon">✓</div><div><h3>确认作品，进入编辑器</h3><p>已经准备好了。你仍可以返回修改文案或图片，进入编辑器后可逐页排版与导出。</p></div></header>'+
+ '<div class="xw-export-summary"><div class="xw-summary-item"><span>图文标题</span><strong id="xw-export-title"></strong></div><div class="xw-summary-item"><span>正文预览</span><strong id="xw-export-text"></strong></div>'+
+ '<div class="xw-summary-item"><span>参考图片</span><strong id="xw-export-images"></strong></div><div class="xw-summary-item"><span>创作进度</span><strong id="xw-copy-badge"></strong></div></div>'+
+ '<div class="xw-finale"><h4>开始制作整套图文</h4><p>打开多页编辑器，调整每页文字和配色，然后导出高清图片。图片上传及 AI 重绘均可跳过。</p><button type="button" class="primary-btn" id="xw-finish">进入图文编辑器 ↗</button></div>'+
+ '<footer class="xw-actions"><button type="button" class="ghost-btn" data-xw-back="3">← 返回调整图片</button><button type="button" class="ghost-btn" data-xw-back="2">修改文案</button></footer></section>'+
+ '</div></div>';
+ const panels=Array.from(shell.querySelectorAll('.xw-panel'));
+ body.replaceChildren(shell);
+ const target=$('xw-import-body');for(const node of importNodes)target.appendChild(node);
+ const mainNotice=$('xhs-message');if(mainNotice)$('xw-workspace').prepend(mainNotice);
+ const manual=document.createElement('details');manual.className='xw-manual-details';manual.id='xw-manual-edit';manual.innerHTML='<summary>查看 / 手动修改参考标题和正文</summary>';
+ for(const id of ['xhs-source-title','xhs-source-text']){const el=$(id);if(el){if(el.previousElementSibling?.tagName==='LABEL')manual.append(el.previousElementSibling);manual.append(el);}}
+ target.appendChild(manual);
+ const photoArea=$('xw-photo-area'),photos=$('xhs-photos');if(photos){const header=photos.previousElementSibling;if(header)photoArea.append(header);photoArea.append(photos);}
+ const upload=$('xhs-upload');if(upload){if(upload.previousElementSibling?.tagName==='LABEL')photoArea.append(upload.previousElementSibling);photoArea.append(upload);}
+ $('xw-copy-body').append(rewriteSection);$('xw-image-body').append(imageSection);
+ $('xw-image-body').querySelector('#xhs-direct-editor').textContent='直接进入图文编辑器 ↗';
+ xhsWizard={shell,panels,nav:Array.from(shell.querySelectorAll('.xw-step')),active:1};
+ xhsWizard.nav.forEach(b=>b.addEventListener('click',()=>wizardStep(Number(b.dataset.step))));
+ shell.querySelectorAll('[data-xw-back]').forEach(b=>b.addEventListener('click',()=>wizardStep(Number(b.dataset.xwBack))));
+ $('xw-go-2').onclick=()=>wizardStep(2);$('xw-go-3').onclick=()=>wizardStep(3);$('xw-go-4').onclick=()=>wizardStep(4);
+ $('xw-finish').onclick=()=>$('xhs-direct-editor').click();
+ for(const id of ['xhs-source-title','xhs-source-text'])$(id).addEventListener('input',wizardSummary);
+ shell.addEventListener('input',wizardSummary);shell.addEventListener('change',wizardSummary);
+ wizardSummary();wizardStep(1);
+}
+
 window.openXhsRemake=function({body}){
- picked=[];serial=0;
+ picked=[];serial=0;xhsWizard=null;
  body.innerHTML='<div class="note" style="display:flex;flex-wrap:wrap;gap:8px;background:#f5f4ff;border:1px solid #e6e4ff"><span>① 导入素材</span><span>② 改写文案</span><span>③ 按需重绘图片</span><span>④ 进入编辑器导出</span></div><p class="note"><strong>参考创作不是照搬。</strong> 文案保留核心观点与信息链后重新表达；图片读取原图意图后，用新的构图、媒介和风格重新呈现。</p>'+
  '<h3 style="margin:16px 0 9px;font-size:17px">步骤 1 · 导入参考内容</h3><label class="form-label" for="xhs-share-link">小红书笔记链接 / 分享文字</label><textarea id="xhs-share-link" class="field field-area" rows="2" style="min-height:70px" placeholder="粘贴小红书公开链接或整段分享文字"></textarea>'+
  '<div class="actions" style="margin-top:10px"><button class="primary-btn" id="xhs-load">解析公开笔记</button></div><p id="xhs-message" class="note warn" hidden></p><p id="xhs-source-summary" class="form-hint">等待解析；受限笔记也可以手动导入。</p>'+
@@ -224,6 +310,7 @@ window.openXhsRemake=function({body}){
  $('xhs-direct-editor').onclick=()=>{const title=$('xhs-draft-title')?.value.trim()||$('xhs-source-title').value.trim(),text=$('xhs-draft-body')?.value.trim()||$('xhs-source-text').value.trim();if(!title&&!text){warn('请先填写或生成文案');return;}transfer(title||'参考图文',text);};
  $('xhs-upload').onchange=ev=>{const files=Array.from(ev.target.files||[]).slice(0,9).filter(f=>['image/png','image/jpeg','image/webp'].includes(f.type)&&f.size<8*1024*1024);addPhotos(files.map(f=>({src:URL.createObjectURL(f),origin:f.name+'-'+Date.now(),local:true})));};
  showPhotos();
+ wizardLayout(body);
 };
 })();
 `;
