@@ -11,3 +11,4 @@ jobs:
         with:
           node-version: '22'
       - run: node scripts/check.mjs
+      - run: node --test tests/ux-smoke.test.mjs
