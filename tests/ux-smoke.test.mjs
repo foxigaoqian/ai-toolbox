@@ -22,8 +22,11 @@ test('All browser scripts compile without syntax errors',()=>{
 
 test('Task-first homepage keeps real tool entrypoints',()=>{
  assert.match(html,/id="quick-start"/);
- for(const id of ['tool-01','tool-02','tool-04','tool-26'])assert.ok(html.includes('data-tool="'+id+'"'),'missing '+id);
+ for(const id of ['tool-01','tool-02','tool-04','tool-26'])assert.ok(html.includes('href="/tools/'+id+'"'),'missing dedicated page link '+id);
  assert.match(html,/var chosen='ready'/);
+ assert.match(html,/tool-page-mode/);
+ assert.match(html,/tool-page-breadcrumb/);
+ assert.doesNotMatch(html,/<button data-tool="tool-01" class="task-card">/);
  assert.match(html,/ai-text-prompt/);
  assert.equal(tools.length,46);
  assert.equal(tools.filter(t=>t.status!=='needs-model').length,18);
